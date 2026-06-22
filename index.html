@@ -1,0 +1,749 @@
+<!DOCTYPE html>
+<html lang="ca">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>4 Merge Cloud</title>
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#e07820">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="4 Merge Cloud">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { overflow: hidden; font-family: 'Segoe UI', system-ui, sans-serif; background: #0e1117; color: #c8cad4; overscroll-behavior: none; }
+    canvas { display: block; touch-action: none; position: absolute; top: 0; left: 0; }
+
+    /* ══════════════════════════════════════════
+       LEFT PANEL
+    ══════════════════════════════════════════ */
+    #controls {
+      position: absolute;
+      top: 0; left: 0; bottom: 0;
+      width: 280px;
+      z-index: 20;
+      background: #16181f;
+      border-right: 1px solid #2a2d40;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    #panelHeader {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 14px; border-bottom: 1px solid #2a2d40;
+      flex-shrink: 0; background: #1a1d28;
+    }
+    #panelLogo {
+      display: flex; align-items: center; gap: 8px;
+      font-size: 12px; font-weight: 700; color: #e07820; letter-spacing: 0.5px;
+    }
+    #langToggle {
+      display: flex; border: 1px solid #2a2d40; border-radius: 4px; overflow: hidden;
+    }
+    .lang-btn {
+      padding: 3px 8px; font-size: 10px; font-weight: 700;
+      background: transparent; color: #555; border: none; cursor: pointer; letter-spacing: 0.5px;
+    }
+    .lang-btn.active { background: #e07820; color: #fff; }
+
+    #panelScroll { flex: 1; overflow-y: auto; overflow-x: hidden; }
+    #panelScroll::-webkit-scrollbar { width: 4px; }
+    #panelScroll::-webkit-scrollbar-thumb { background: #2a2d40; border-radius: 2px; }
+
+    /* Load area */
+    #loadArea {
+      margin: 12px; border: 1.5px dashed #2a2d40; border-radius: 8px;
+      text-align: center; padding: 14px 8px; cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+    }
+    #loadArea:hover { border-color: #e07820; background: rgba(224,120,32,0.04); }
+    .load-title { font-size: 12px; font-weight: 600; color: #ddd; margin-top: 6px; }
+    .load-sub { font-size: 10px; color: #555; margin-top: 3px; }
+    #fileInput { display: none; }
+
+    .section-label {
+      font-size: 9px; font-weight: 700; color: #445;
+      letter-spacing: 1.2px; text-transform: uppercase;
+      padding: 6px 14px 4px;
+    }
+    #cloudSection { padding-bottom: 6px; }
+    #cloudListPanel { max-height: 100px; overflow-y: auto; padding: 0 12px; font-size: 11px; }
+    #cloudListPanel:empty::before {
+      content: 'Cap núvol actiu'; color: #445;
+      display: block; padding: 3px 2px; font-style: italic;
+    }
+    .cloud-item {
+      display: flex; align-items: center; padding: 4px 6px;
+      cursor: pointer; border-radius: 5px; border: 1px solid transparent; margin-bottom: 2px;
+    }
+    .cloud-item:hover { background: #1e2130; }
+    .cloud-item.selected { background: #2a1e0f; border-color: #e07820; }
+    .cloud-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: #ccc; }
+    .cloud-pts { font-size: 9px; color: #556; margin-right: 4px; white-space: nowrap; }
+    .cloud-eye { cursor: pointer; padding: 0 3px; font-size: 12px; color: #445; }
+    .cloud-eye:hover { color: #aaa; }
+    .cloud-del { color: #b33; cursor: pointer; padding: 0 3px; font-size: 12px; }
+    .cloud-del:hover { color: #f55; }
+
+    /* ── ACCORDION ─────────────────────────────── */
+    .acc { border-top: 1px solid #1e2130; }
+    .acc-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 9px 14px; cursor: pointer;
+      font-size: 11px; font-weight: 600; color: #889; letter-spacing: 0.4px;
+      user-select: none; transition: background 0.15s;
+    }
+    .acc-header:hover { background: #1a1d28; color: #ccddee; }
+    .acc-header.open { color: #e07820; background: #1a1d28; }
+    .acc-arrow { font-size: 9px; transition: transform 0.2s; opacity: 0.4; }
+    .acc-header.open .acc-arrow { transform: rotate(90deg); opacity: 1; }
+    .acc-icon { margin-right: 7px; }
+    .acc-body { display: none; padding: 6px 12px 10px; background: #12141b; }
+    .acc-body.open { display: block; }
+
+    /* Buttons */
+    .acc-body button {
+      display: block; width: 100%; margin: 3px 0; padding: 7px 10px;
+      font-size: 11px; font-weight: 500;
+      background: #1e2130; color: #aab;
+      border: 1px solid #252840; border-radius: 5px;
+      cursor: pointer; text-align: left;
+      transition: background 0.15s;
+    }
+    .acc-body button:hover { background: #252840; color: #fff; }
+    .acc-body button.active { background: #3a1e08; border-color: #e07820; color: #f90; }
+    .btn-row { display: flex; gap: 5px; }
+    .btn-row button { flex: 1; }
+    .btn-green { background: #0e2a18 !important; border-color: #1a6a30 !important; color: #6f6 !important; }
+    .btn-green:hover { background: #143820 !important; }
+    .btn-blue { background: #0d1e38 !important; border-color: #1a4a8a !important; color: #88ccff !important; }
+    .btn-blue:hover { background: #122840 !important; }
+    .btn-red { background: #2a0e0e !important; border-color: #7a1a1a !important; color: #f88 !important; }
+    .btn-red:hover { background: #380e0e !important; }
+    .btn-orange { background: #e07820 !important; border-color: #f08830 !important; color: #fff !important; font-weight: 600 !important; }
+    .btn-orange:hover { background: #f08830 !important; }
+
+    /* Numeric transform */
+    #numericTransform {
+      display: none; font-size: 11px;
+      background: #0e1117; border: 1px solid #252840;
+      border-radius: 5px; padding: 8px; margin: 5px 0;
+    }
+    .num-grid {
+      display: grid; grid-template-columns: 52px 1fr; gap: 3px 6px;
+      align-items: center; margin-bottom: 4px;
+    }
+    .num-label { font-size: 10px; color: #667; }
+    .num-input {
+      width: 100%; font-size: 11px; background: #1a1d28; color: #eee;
+      border: 1px solid #252840; border-radius: 3px; padding: 3px 5px;
+    }
+    #applyTransform { background: #e07820 !important; color: #fff !important; border-color: #f08830 !important; font-weight: 600 !important; margin-top: 4px; }
+
+    /* Noise filter */
+    #noiseFilterPanel { font-size: 11px; background: transparent; padding: 0; margin: 0; }
+    .slider-row {
+      display: flex; align-items: center; gap: 6px; margin-bottom: 5px;
+      font-size: 10px; color: #889;
+    }
+    .slider-row input[type=range] { flex: 1; }
+    .slider-row input[type=number] {
+      width: 52px; font-size: 11px; background: #1a1d28; color: #eee;
+      border: 1px solid #252840; border-radius: 3px; padding: 2px 4px;
+    }
+
+    /* DXF list */
+    #dxfInput { display: none; }
+    #dxfListPanel { max-height: 80px; overflow-y: auto; margin: 4px 0; font-size: 11px; }
+    #dxfListPanel:empty::before { content: 'Cap DXF carregat'; color: #445; display: block; padding: 3px 2px; font-style: italic; }
+    .dxf-item { display: flex; align-items: center; padding: 2px 0; border-radius: 3px; }
+    .dxf-color { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; margin-right: 6px; }
+    .dxf-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #aab; }
+    .dxf-eye { cursor: pointer; padding: 0 4px; font-size: 12px; color: #556; }
+    .dxf-del { color: #b33; cursor: pointer; padding: 0 4px; font-size: 12px; }
+    .dxf-del:hover { color: #f55; }
+
+    /* Annotate panel */
+    #annotatePanel {
+      display: none; background: #0e1117; border: 1px solid #252840;
+      border-radius: 5px; padding: 8px; margin: 4px 0; font-size: 11px;
+    }
+    .color-row { display: flex; gap: 4px; margin-bottom: 5px; }
+    .ann-color { width: 24px; height: 24px; border-radius: 4px; border: 2px solid transparent; cursor: pointer; }
+    .ann-color.selected { border-color: #fff; }
+    .mode-row { display: flex; gap: 3px; margin-bottom: 5px; }
+    .mode-row button { flex: 1; font-size: 10px; padding: 4px 2px; }
+
+    /* Auto-align panel */
+    #autoAlignPanel {
+      display: none; font-size: 11px; background: #0e1117;
+      border: 1px solid #252840; border-radius: 5px;
+      padding: 8px; margin: 4px 0; color: #aab; line-height: 1.6;
+    }
+    #autoAlignPanel button { font-size: 11px; padding: 4px 8px; margin: 2px 2px 0 0; width: auto !important; display: inline-block !important; }
+
+    /* Panel bottom */
+    #panelBottom {
+      flex-shrink: 0; padding: 10px 12px;
+      border-top: 1px solid #1e2130; background: #12141b;
+    }
+    #bottomRow { display: flex; gap: 5px; margin-bottom: 8px; }
+    #bottomRow button {
+      flex: 1; padding: 6px 4px; font-size: 10px; font-weight: 600;
+      background: #1a1d28; color: #778; border: 1px solid #252840;
+      border-radius: 5px; cursor: pointer;
+    }
+    #bottomRow button:hover { background: #1e2130; color: #bbc; }
+    #bottomRow button:disabled { opacity: 0.3; cursor: default; }
+    #merge {
+      display: block; width: 100%; padding: 10px; margin-bottom: 6px;
+      font-size: 12px; font-weight: 700; background: #e07820; color: #fff;
+      border: none; border-radius: 6px; cursor: pointer; letter-spacing: 0.5px;
+    }
+    #merge:hover { background: #f08830; }
+    #btnReset {
+      display: block; width: 100%; padding: 7px; font-size: 10px; font-weight: 700;
+      background: transparent; color: #c33; border: 1px solid #3a0e0e;
+      border-radius: 5px; cursor: pointer; letter-spacing: 0.5px;
+    }
+    #btnReset:hover { background: #1a0808; }
+
+    /* ══════════════════════════════════════════
+       VIEWER
+    ══════════════════════════════════════════ */
+    #viewer {
+      position: absolute; top: 0; left: 280px; right: 0; bottom: 0;
+    }
+
+    /* Welcome screen */
+    #welcomeScreen {
+      position: absolute; inset: 0;
+      display: flex; align-items: center; justify-content: center;
+      z-index: 5; pointer-events: none;
+    }
+    #welcomeCard {
+      background: #16181f; border: 1px solid #2a2d40;
+      border-radius: 12px; padding: 32px 36px;
+      max-width: 560px; width: 90%; pointer-events: auto;
+    }
+    #welcomeBadge {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: #1a1d28; border: 1px solid #2a2d40; border-radius: 20px;
+      padding: 4px 12px; font-size: 10px; font-weight: 700;
+      color: #e07820; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 16px;
+    }
+    #welcomeCard h1 { font-size: 26px; font-weight: 700; color: #eee; margin-bottom: 8px; line-height: 1.3; }
+    #welcomeCard > p { font-size: 12px; color: #667; line-height: 1.6; margin-bottom: 20px; }
+    .welcome-steps { list-style: none; margin-bottom: 24px; }
+    .welcome-steps li { display: flex; gap: 12px; margin-bottom: 10px; font-size: 12px; color: #889; line-height: 1.5; }
+    .step-num {
+      flex-shrink: 0; width: 20px; height: 20px;
+      background: #1e2130; border: 1px solid #2a2d40; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 10px; font-weight: 700; color: #e07820; margin-top: 1px;
+    }
+    .welcome-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .welcome-action {
+      background: #1a1d28; border: 1px solid #2a2d40; border-radius: 8px;
+      padding: 14px; cursor: pointer; transition: border-color 0.2s, background 0.2s;
+    }
+    .welcome-action:hover { border-color: #e07820; background: #1e2030; }
+    .wa-icon { font-size: 16px; margin-bottom: 6px; }
+    .wa-title { font-size: 12px; font-weight: 600; color: #e07820; margin-bottom: 4px; }
+    .wa-desc { font-size: 10px; color: #556; line-height: 1.5; }
+    .wa-link { font-size: 10px; color: #e07820; margin-top: 6px; display: block; opacity: 0.8; }
+
+    /* Canvases */
+    #lassoCanvas { position: absolute; inset: 0; display: none; pointer-events: none; z-index: 10; }
+    #annotateCanvas { position: absolute; inset: 0; z-index: 12; pointer-events: none; display: block; }
+    #viewer.lasso-active { cursor: crosshair; }
+    #viewer.annotate-active { cursor: crosshair; }
+
+    /* Badges */
+    .badge {
+      position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+      padding: 6px 18px; border-radius: 6px; font-size: 12px; color: #fff;
+      z-index: 25; display: none; pointer-events: none; white-space: nowrap;
+    }
+    #loadingBadge { background: rgba(0,80,200,0.92); }
+    #measureBadge { background: rgba(180,60,0,0.92); }
+    #lassoBadge   { background: rgba(140,20,20,0.92); }
+    #alignBadge   { background: rgba(0,140,80,0.92); top: 46px; }
+    #confirmBadge {
+      position: absolute; top: 46px; left: 50%; transform: translateX(-50%);
+      background: rgba(0,160,80,0.95); color: #fff;
+      padding: 5px 18px; border-radius: 6px; font-size: 12px;
+      z-index: 26; display: none; pointer-events: none; transition: opacity 0.4s;
+    }
+    #lassoCancel {
+      position: absolute; bottom: 90px; left: 50%; transform: translateX(-50%);
+      z-index: 30; display: none; background: rgba(140,20,20,0.95); color: #fff;
+      border: 1px solid #f66; border-radius: 6px; padding: 8px 20px; font-size: 14px; cursor: pointer;
+    }
+
+    /* Stats panel */
+    #statsPanel {
+      position: absolute; top: 10px; right: 52px;
+      background: rgba(22,24,31,0.97); border: 1px solid #2a2d40;
+      border-radius: 8px; padding: 10px 14px;
+      font-size: 11px; z-index: 15; display: none; min-width: 195px;
+    }
+    .stats-head {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 9px; font-weight: 700; color: #e07820;
+      letter-spacing: 1px; text-transform: uppercase; margin-bottom: 6px;
+    }
+    .stats-dot { width: 6px; height: 6px; background: #e07820; border-radius: 50%; }
+    #statsTotalPts { font-size: 13px; color: #dde; font-weight: 600; margin-left: auto; }
+    .stat-row { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 2px; }
+    .stat-label { font-size: 10px; color: #556; }
+    .stat-value { font-size: 10px; color: #cce; font-weight: 600; font-family: monospace; }
+
+    /* View toolbar */
+    #viewToolbar {
+      position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+      display: flex; flex-direction: column; gap: 4px; z-index: 15;
+    }
+    .view-btn {
+      width: 36px; height: 36px; border: 1px solid #2a2d40;
+      background: rgba(22,24,31,0.92); color: #667; padding: 0; cursor: pointer;
+      font-size: 10px; font-weight: 700; border-radius: 5px; transition: all 0.15s;
+    }
+    .view-btn:hover { background: rgba(40,44,64,0.95); color: #dde; border-color: #3a3d58; }
+    .view-btn.ortho-active { background: rgba(0,80,180,0.85); border-color: #3a8aff; color: #fff; }
+
+    /* Measure list */
+    #measureList {
+      position: absolute; bottom: 90px; right: 52px; z-index: 20;
+      background: rgba(22,24,31,0.97); border: 1px solid #2a2d40;
+      color: #eee; padding: 8px 12px; font-size: 11px; font-family: monospace;
+      border-radius: 6px; max-width: 280px; white-space: pre; display: none;
+    }
+
+    /* ══════════════════════════════════════════
+       CAD COMMAND LINE
+    ══════════════════════════════════════════ */
+    #cmdLine {
+      position: absolute; bottom: 0; left: 0; right: 0; z-index: 18;
+      background: rgba(12,14,20,0.98); border-top: 1px solid #1e2130;
+      display: flex; flex-direction: column;
+    }
+    #cmdLine.expanded { height: 185px; }
+    #cmdLine.collapsed { height: 36px; }
+    #cmdLine.collapsed #cmdHistory { display: none; }
+
+    #cmdHeader {
+      display: flex; align-items: center; gap: 8px;
+      padding: 0 12px; height: 36px; cursor: pointer; flex-shrink: 0;
+      user-select: none;
+    }
+    #cmdHeader:hover { background: rgba(255,255,255,0.02); }
+    .cmd-label {
+      flex: 1; font-size: 10px; font-weight: 700; color: #556;
+      letter-spacing: 1px; text-transform: uppercase;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .cmd-label-dot { width: 5px; height: 5px; background: #e07820; border-radius: 50%; }
+    #cmdLine.expanded .cmd-label { color: #e07820; }
+    #cmdLine.expanded .cmd-label-dot { background: #e07820; box-shadow: 0 0 4px #e07820; }
+    #cmdToggleBtn {
+      font-size: 9px; color: #445; background: none; border: none;
+      cursor: pointer; transition: transform 0.2s;
+    }
+    #cmdLine.collapsed #cmdToggleBtn { transform: rotate(180deg); }
+
+    #cmdHistory {
+      flex: 1; overflow-y: auto; padding: 5px 12px;
+      font-size: 11px; font-family: 'Cascadia Code', 'Consolas', monospace; line-height: 1.7;
+    }
+    #cmdHistory::-webkit-scrollbar { width: 3px; }
+    #cmdHistory::-webkit-scrollbar-thumb { background: #2a2d40; }
+
+    .cmd-u   { color: #6699cc; }
+    .cmd-a   { color: #77cc99; }
+    .cmd-x   { color: #cc9944; font-style: italic; }
+    .cmd-e   { color: #cc5544; }
+    .cmd-sys { color: #334455; }
+    .cmd-thinking { animation: cmd-blink 0.9s infinite; color: #556; }
+    @keyframes cmd-blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+    #cmdInputRow {
+      display: flex; align-items: center; gap: 0;
+      padding: 0 12px; height: 36px; flex-shrink: 0;
+      border-top: 1px solid #1a1d28;
+    }
+    #cmdLine.collapsed #cmdInputRow { border-top: none; }
+    .cmd-prompt {
+      font-size: 12px; font-weight: 700; color: #e07820;
+      font-family: 'Cascadia Code', 'Consolas', monospace; margin-right: 8px; flex-shrink: 0;
+    }
+    #cmdText {
+      flex: 1; background: transparent; color: #cce; border: none; outline: none;
+      font-size: 12px; font-family: 'Cascadia Code', 'Consolas', monospace;
+    }
+    #cmdText::placeholder { color: #2a3040; }
+    #cmdVoiceBtn {
+      background: none; border: none; cursor: pointer; color: #334; font-size: 14px;
+      padding: 0 4px; flex-shrink: 0; transition: color 0.15s;
+    }
+    #cmdVoiceBtn:hover { color: #e07820; }
+    #cmdVoiceBtn.recording { color: #c33; animation: cmd-blink 0.6s infinite; }
+
+    /* Branding */
+    #branding {
+      position: absolute; top: 10px; right: 52px;
+      text-align: right; z-index: 15; pointer-events: none; display: block;
+    }
+    #brandingName { font-size: 13px; font-weight: 700; color: #dde; letter-spacing: 0.3px; }
+    #brandingName .dot { color: #e07820; }
+    #brandingSub { font-size: 9px; color: #334; letter-spacing: 0.5px; margin-top: 1px; }
+
+    /* split divider compat */
+    #splitDivider { display: none; }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+
+  <!-- ═══════════════════════════════════════
+       LEFT CONTROL PANEL
+  ═══════════════════════════════════════ -->
+  <div id="controls">
+    <div id="panelHeader">
+      <div id="panelLogo">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <rect x="1" y="1" width="6" height="6" rx="1" fill="#e07820"/>
+          <rect x="9" y="1" width="6" height="6" rx="1" fill="#e07820" opacity="0.6"/>
+          <rect x="1" y="9" width="6" height="6" rx="1" fill="#e07820" opacity="0.6"/>
+          <rect x="9" y="9" width="6" height="6" rx="1" fill="#e07820" opacity="0.3"/>
+        </svg>
+        4MC Control Panel
+      </div>
+      <div id="langToggle">
+        <button class="lang-btn" data-lang="ca">CAT</button>
+        <button class="lang-btn" data-lang="en">ENG</button>
+      </div>
+    </div>
+
+    <div id="panelScroll">
+      <!-- Load -->
+      <div id="loadArea">
+        <label for="fileInput" style="cursor:pointer;display:block">
+          <svg width="28" height="28" viewBox="0 0 28 28" fill="none" stroke="#e07820" stroke-width="1.5" style="display:block;margin:0 auto">
+            <path d="M14 4v14M8 10l6-6 6 6"/>
+            <rect x="3" y="18" width="22" height="6" rx="2" stroke-opacity="0.4"/>
+          </svg>
+          <div class="load-title">Carregar Fitxer (XYZ/PLY)</div>
+          <div class="load-sub">ARROSSEGA I DEIXA ELS FITXERS AQUÍ</div>
+        </label>
+        <input type="file" id="fileInput" multiple accept=".xyz,.ply,.txt,text/plain,application/octet-stream">
+      </div>
+
+      <!-- Clouds -->
+      <div id="cloudSection">
+        <div class="section-label">Núvols carregats</div>
+        <div id="cloudListPanel"></div>
+      </div>
+
+      <!-- PROPIETATS -->
+      <div class="acc">
+        <div class="acc-header" data-acc="accProps">
+          <span><span class="acc-icon">&#9776;</span>Propietats</span>
+          <span class="acc-arrow">&#9654;</span>
+        </div>
+        <div class="acc-body" id="accProps-body">
+          <div id="propsContent" style="font-size:11px;color:#556;line-height:1.7">
+            Cap núvol carregat. Comença carregant un fitxer PLY o XYZ.
+          </div>
+        </div>
+      </div>
+
+      <!-- MOURE / ROTAR -->
+      <div class="acc">
+        <div class="acc-header" data-acc="accMove">
+          <span><span class="acc-icon">&#10010;</span>Moure Núvol / Rotar Núvol</span>
+          <span class="acc-arrow">&#9654;</span>
+        </div>
+        <div class="acc-body" id="accMove-body">
+          <div class="btn-row">
+            <button id="modeTranslate">&#8596; Moure Núvol</button>
+            <button id="modeRotate">&#8635; Rotar Núvol</button>
+          </div>
+          <button id="toggleNumeric" style="margin-top:4px;font-size:10px;color:#667">&#9881; Transformació Numèrica</button>
+          <div id="numericTransform">
+            <div class="num-grid">
+              <span class="num-label">X Trans.</span><input id="tx" class="num-input" type="number" step="0.001" value="0">
+              <span class="num-label">Y Trans.</span><input id="ty" class="num-input" type="number" step="0.001" value="0">
+              <span class="num-label">Z Trans.</span><input id="tz" class="num-input" type="number" step="0.001" value="0">
+              <span class="num-label">Rx (°)</span><input id="rx" class="num-input" type="number" value="0">
+              <span class="num-label">Ry (°)</span><input id="ry" class="num-input" type="number" value="0">
+              <span class="num-label">Rz (°)</span><input id="rz" class="num-input" type="number" value="0">
+            </div>
+            <button id="applyTransform" class="btn-orange">&#10003; APLICAR</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- CAIXA DE TALL -->
+      <div class="acc">
+        <div class="acc-header" data-acc="accClip">
+          <span><span class="acc-icon">&#9634;</span>Caixa de Tall</span>
+          <span class="acc-arrow">&#9654;</span>
+        </div>
+        <div class="acc-body" id="accClip-body">
+          <button id="createClipBox">&#9634; Crear Caixa de Tall</button>
+          <div class="btn-row" style="margin-top:3px">
+            <button id="moveClipBox">&#8596; Moure Caixa</button>
+            <button id="rotateClipBox">&#8635; Rotar Caixa</button>
+          </div>
+          <button id="applyClipBox" class="btn-green" style="margin-top:3px">&#9984; Aplicar Tall (Definitiu)</button>
+          <button id="removeClipBox" class="btn-red" style="margin-top:3px">&#10005; Eliminar Caixa</button>
+          <button id="btnExportSection" style="margin-top:3px">&#8659; Exportar Secció DXF</button>
+        </div>
+      </div>
+
+      <!-- ALINEAR -->
+      <div class="acc">
+        <div class="acc-header" data-acc="accAlign">
+          <span><span class="acc-icon">&#10022;</span>Alinear 2 Punts / ICP</span>
+          <span class="acc-arrow">&#9654;</span>
+        </div>
+        <div class="acc-body" id="accAlign-body">
+          <div class="btn-row">
+            <button id="align2pt">2 Points</button>
+            <button id="align3pt">3 Points</button>
+          </div>
+          <button id="btnAutoAlign" class="btn-green" style="margin-top:4px">&#127912; Auto-Alinear (Color)</button>
+          <button id="btnICP" class="btn-blue" style="margin-top:3px">&#9881; Ajustar ICP (Fí)</button>
+          <div id="autoAlignPanel">
+            <div id="autoAlignResult">...</div>
+            <button id="btnApplyAutoAlign" style="display:none">&#10003; Aplicar</button>
+            <button id="btnCancelAutoAlign">&#10005; Cancel·lar</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- CLEAN & MARKUP -->
+      <div class="acc">
+        <div class="acc-header" data-acc="accClean">
+          <span><span class="acc-icon">&#9999;</span>Clean &amp; Markup</span>
+          <span class="acc-arrow">&#9654;</span>
+        </div>
+        <div class="acc-body" id="accClean-body">
+          <div class="btn-row">
+            <button id="btnRectErase">&#9644; Rectangle</button>
+            <button id="btnLassoErase">&#9999; Lliure</button>
+          </div>
+          <button id="btnAnnotate" style="margin-top:4px">&#9998; Dibuix / Anotació</button>
+          <div id="annotatePanel">
+            <div class="color-row">
+              <div class="ann-color selected" data-color="#ff4444" style="background:#ff4444"></div>
+              <div class="ann-color" data-color="#ffdd00" style="background:#ffdd00"></div>
+              <div class="ann-color" data-color="#00ddff" style="background:#00ddff"></div>
+              <div class="ann-color" data-color="#00ff88" style="background:#00ff88"></div>
+              <div class="ann-color" data-color="#ffffff" style="background:#ffffff"></div>
+            </div>
+            <div class="mode-row">
+              <button id="annModeFree" class="active">&#9999; Lliure</button>
+              <button id="annModeLine">&#9135; Línia</button>
+              <button id="annModeArrow">&#8594; Fletxa</button>
+            </div>
+            <div class="slider-row">
+              <span>Gruix:</span>
+              <input type="range" id="annWidth" min="1" max="8" value="2">
+            </div>
+            <div class="btn-row" style="margin-top:4px">
+              <button id="annUndo">&#8617; Desfer traç</button>
+              <button id="annClear" class="btn-red">&#128465; Netejar</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- DXF OVERLAY -->
+      <div class="acc">
+        <div class="acc-header" data-acc="accDXF">
+          <span><span class="acc-icon">&#128208;</span>Carregar DXF Overlay</span>
+          <span class="acc-arrow">&#9654;</span>
+        </div>
+        <div class="acc-body" id="accDXF-body">
+          <label id="dxfInputLabel" for="dxfInput" style="display:block;padding:7px 10px;background:#0e2a18;border:1px solid #1a6a30;color:#6f6;border-radius:5px;cursor:pointer;font-size:11px;text-align:center;margin-bottom:4px">
+            &#128208; Importar Contorn DXF
+          </label>
+          <input type="file" id="dxfInput" multiple accept=".dxf">
+          <div id="dxfListPanel"></div>
+        </div>
+      </div>
+
+      <!-- FILTRE DE SOROLL -->
+      <div class="acc">
+        <div class="acc-header" data-acc="accNoise">
+          <span><span class="acc-icon">&#10022;</span>Filtre de Soroll (SOR)</span>
+          <span class="acc-arrow">&#9654;</span>
+        </div>
+        <div class="acc-body" id="accNoise-body">
+          <div id="noiseFilterPanel">
+            <div class="slider-row">
+              <span>Agressivitat:</span>
+              <input id="noiseSigma" type="range" min="0.5" max="5" step="0.1" value="2">
+              <span id="noiseSigmaVal">2.0</span>&#963;
+            </div>
+            <div class="slider-row">
+              <span>Veïns K:</span>
+              <input id="noiseK" type="number" value="10" min="3" max="30">
+            </div>
+            <button id="btnApplyNoise">Aplicar Filtre</button>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /panelScroll -->
+
+    <div id="panelBottom">
+      <div id="bottomRow">
+        <button id="btnUndo" disabled>&#8617; Desfer</button>
+        <button id="toggleMeasure">&#128207; Mesura</button>
+        <button id="clearMeasures">&#128465; Cotes</button>
+      </div>
+      <button id="merge">&#8859; UNIR I DESCARREGAR XYZ</button>
+      <button id="btnReset">REINICIAR TOT</button>
+    </div>
+  </div><!-- /controls -->
+
+
+  <!-- ═══════════════════════════════════════
+       VIEWER
+  ═══════════════════════════════════════ -->
+  <div id="viewer">
+
+    <!-- Welcome screen -->
+    <div id="welcomeScreen">
+      <div id="welcomeCard">
+        <div id="welcomeBadge">
+          <span>&#9679;</span> AS-BUILT 3D CAD SCANNER
+        </div>
+        <h1>Benvingut/da a 4 Merge Cloud</h1>
+        <p>L'editor 3D i Copilot IA de núvols de punts de referència</p>
+        <ul class="welcome-steps">
+          <li>
+            <div class="step-num">1</div>
+            <span>Col·loca, rota i uneix múltiples models (formats <strong>.PLY</strong> i <strong>.XYZ</strong>) mitjançant alineadors digitals fets a mida o ICP de precisió.</span>
+          </li>
+          <li>
+            <div class="step-num">2</div>
+            <span>Fes talls de seccions, amida distàncies, filtra soroll estàndard o realitza esborrats de punts no desitjats de forma interactiva.</span>
+          </li>
+          <li>
+            <div class="step-num">3</div>
+            <span>Dibuixa marques i enllaça amb el Copilot IA per demanar diagnòstics i automatitzar transformacions al moment.</span>
+          </li>
+        </ul>
+        <div class="welcome-actions">
+          <div class="welcome-action" id="waDemoCloud">
+            <div class="wa-icon">&#9889;</div>
+            <div class="wa-title">Generar Escaneig de Prova (Demo)</div>
+            <div class="wa-desc">Crea instantàniament una sala de 15.000 punts procedimentals per investigar les funcions.</div>
+            <span class="wa-link">Començar immediatament →</span>
+          </div>
+          <div class="welcome-action" onclick="document.getElementById('fileInput').click()">
+            <div class="wa-icon">&#128193;</div>
+            <div class="wa-title">Arrossegar o Carregar Fitxer de Punts</div>
+            <div class="wa-desc">Carrega els teus propis fitxers .PLY, .XYZ o .TXT obtinguts per escàner làser o drons.</div>
+            <span class="wa-link">Explorar ordinador →</span>
+          </div>
+          <div class="welcome-action" onclick="document.querySelector('[data-acc=accDXF]').click()">
+            <div class="wa-icon">&#128208;</div>
+            <div class="wa-title">Carrega fitxer DXF Overlay</div>
+            <div class="wa-desc">Importa contorns AutoCAD i dibuixos vectorials 2D sobreposats per a comprovació As-Built.</div>
+            <span class="wa-link">Importar contorn vector →</span>
+          </div>
+        </div>
+        <p style="font-size:9px;color:#334;margin-top:18px;text-align:right">v1.3.0 (Three.js WebGL)</p>
+      </div>
+    </div>
+
+    <canvas id="lassoCanvas"></canvas>
+    <canvas id="annotateCanvas"></canvas>
+
+    <div id="loadingBadge"  class="badge">&#9203; Carregant fitxer...</div>
+    <div id="measureBadge"  class="badge">&#128207; Mode mesura — fes clic a dos punts del núvol</div>
+    <div id="lassoBadge"    class="badge">&#9999; Esborra — arrossega per seleccionar àrea</div>
+    <div id="alignBadge"    class="badge"></div>
+    <div id="confirmBadge">&#10003; Posició guardada</div>
+    <button id="lassoCancel">&#10005; Cancel·lar</button>
+    <div id="measureList"></div>
+
+    <!-- Stats panel (top right, visible when cloud loaded) -->
+    <div id="statsPanel">
+      <div class="stats-head">
+        <span class="stats-dot"></span>
+        Núvols Carregats
+        <span id="statsTotalPts"></span>
+      </div>
+      <div class="stat-row"><span class="stat-label">Dimensions màximes X:</span><span class="stat-value" id="statsDimX">—</span></div>
+      <div class="stat-row"><span class="stat-label">Dimensions màximes Y:</span><span class="stat-value" id="statsDimY">—</span></div>
+      <div class="stat-row"><span class="stat-label">Dimensions màximes Z:</span><span class="stat-value" id="statsDimZ">—</span></div>
+    </div>
+
+    <!-- Branding (top right, hidden when stats panel visible) -->
+    <div id="branding">
+      <div id="brandingName"><span class="dot">&#9679;</span> 4 MERGE CLOUD</div>
+      <div id="brandingSub">Visor i Editor 3D de Núvols de Punts</div>
+    </div>
+
+    <!-- View toolbar (right side) -->
+    <div id="viewToolbar">
+      <button id="viewA_3d"    class="view-btn" title="Vista 3D">3D</button>
+      <button id="viewA_top"   class="view-btn" title="Vista en Planta">PL</button>
+      <button id="viewA_front" class="view-btn" title="Vista Frontal">FR</button>
+      <button id="viewA_back"  class="view-btn" title="Vista Posterior">PO</button>
+      <button id="viewA_right" class="view-btn" title="Lateral Dreta">LD</button>
+      <button id="viewA_left"  class="view-btn" title="Lateral Esquerra">LE</button>
+    </div>
+
+    <!-- CAD Command Line (Copilot IA) -->
+    <div id="cmdLine" class="collapsed">
+      <div id="cmdHeader">
+        <span class="cmd-label">
+          <span class="cmd-label-dot"></span>
+          Copilot IA — Línia de Comandes
+        </span>
+        <button id="cmdToggleBtn">&#9650;</button>
+      </div>
+      <div id="cmdHistory"></div>
+      <div id="cmdInputRow">
+        <span class="cmd-prompt">4MC&gt;</span>
+        <input type="text" id="cmdText" autocomplete="off" spellcheck="false"
+               placeholder="Escriu una ordre o pregunta (ex: vista de planta, aplica filtre soroll)…">
+        <button id="cmdVoiceBtn" title="Entrada per veu">&#127908;</button>
+      </div>
+    </div>
+
+    <div id="splitDivider"></div>
+  </div><!-- /viewer -->
+
+  <script>
+    // Language detection from URL param
+    const _lp = new URLSearchParams(location.search).get('lang');
+    window.APP_LANG = (_lp === 'en') ? 'en' : 'ca';
+    document.querySelectorAll('.lang-btn').forEach(b => {
+      b.classList.toggle('active', b.dataset.lang === window.APP_LANG);
+      b.addEventListener('click', () => {
+        const u = new URL(location.href);
+        u.searchParams.set('lang', b.dataset.lang);
+        location.href = u.toString();
+      });
+    });
+  </script>
+  <script type="module" src="main.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js').catch(() => {});
+      });
+    }
+  </script>
+</body>
+</html>
