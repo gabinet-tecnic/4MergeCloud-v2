@@ -155,7 +155,7 @@ function init() {
   const height = container.clientHeight || window.innerHeight;
 
   scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x202020);
+  scene.background = new THREE.Color(0x0e1117);
   scene.add(new THREE.AxesHelper(1));
 
   camera = new THREE.PerspectiveCamera(60, width / height, 0.01, 1e7);
@@ -232,9 +232,13 @@ function init() {
 // ─────────────────────────────────────────────
 // Resize
 // ─────────────────────────────────────────────
+function _viewerSize() {
+  const v = document.getElementById('viewer');
+  return v ? { w: v.clientWidth, h: v.clientHeight } : { w: window.innerWidth, h: window.innerHeight };
+}
+
 function onWindowResize() {
-  const w = window.innerWidth;
-  const h = window.innerHeight;
+  const { w, h } = _viewerSize();
   const a = w / h;
 
   camera.aspect = a;
@@ -369,7 +373,7 @@ function setOrthoView(dir, up) {
   const center = box.getCenter(new THREE.Vector3());
   const size   = box.getSize(new THREE.Vector3());
   const maxDim = Math.max(size.x, size.y, size.z) || 10;
-  const W = window.innerWidth, H = window.innerHeight;
+  const { w: W, h: H } = _viewerSize();
   const aspect = W / H;
   const hH = maxDim * 0.6;
   const hW = hH * aspect;
@@ -2031,10 +2035,14 @@ function setupUI() {
   const sigmaVal   = document.getElementById('noiseSigmaVal');
   if (sigmaNoise) sigmaNoise.oninput = () => { sigmaVal.textContent = (+sigmaNoise.value).toFixed(1); };
 
-  document.getElementById('btnNoiseFilter').onclick = () => {
-    const panel = document.getElementById('noiseFilterPanel');
-    panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
-  };
+  // btnNoiseFilter only exists in v1 (v2 shows panel directly in accordion)
+  const _btnNF = document.getElementById('btnNoiseFilter');
+  if (_btnNF) {
+    _btnNF.onclick = () => {
+      const panel = document.getElementById('noiseFilterPanel');
+      if (panel) panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+    };
+  }
 
   document.getElementById('btnApplyNoise').onclick = async () => {
     const target = selectedCloud ? [selectedCloud] : clouds.filter(c => c.visible);
@@ -3291,8 +3299,7 @@ function animate() {
     }
     updateClipPlanes();
 
-    const W = window.innerWidth;
-    const H = window.innerHeight;
+    const { w: W, h: H } = _viewerSize();
     const camA = useOrtho ? orthoCamera : camera;
 
     if (!useOrtho) { camera.aspect = W / H; camera.updateProjectionMatrix(); }
