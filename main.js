@@ -1881,6 +1881,19 @@ function setupUI() {
 
   fileInput.addEventListener('change', (e) => handleFiles(e.target.files));
 
+  // ── Drag & Drop al loadArea i al viewer ──
+  ['loadArea', 'viewer'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('dragover', (e) => { e.preventDefault(); el.classList.add('drag-over'); });
+    el.addEventListener('dragleave', () => el.classList.remove('drag-over'));
+    el.addEventListener('drop', (e) => {
+      e.preventDefault();
+      el.classList.remove('drag-over');
+      handleFiles(e.dataTransfer.files);
+    });
+  });
+
   // ── Transformació numèrica ──
   document.getElementById('toggleNumeric').onclick = () => {
     const div = document.getElementById('numericTransform');
@@ -2881,30 +2894,11 @@ const _aiToolLabels = {
 };
 
 function _aiAddMsg(text, cls) {
-  const box = document.getElementById('aiMessages');
-  if (!box) return;
-  const d = document.createElement('div');
-  d.className = cls;
-  d.textContent = text;
-  box.appendChild(d);
-  box.scrollTop = box.scrollHeight;
-  return d;
+  const clsMap = { 'ai-u': 'cmd-u', 'ai-a': 'cmd-a', 'ai-x': 'cmd-x', 'ai-e': 'cmd-e' };
+  _cmdLog(text, clsMap[cls] || 'cmd-a');
 }
 
-function _aiSetThinking(on) {
-  const box = document.getElementById('aiMessages');
-  if (!box) return;
-  let dot = box.querySelector('.ai-thinking');
-  if (on && !dot) {
-    dot = document.createElement('div');
-    dot.className = 'ai-x ai-thinking';
-    dot.textContent = '⏳ …';
-    box.appendChild(dot);
-    box.scrollTop = box.scrollHeight;
-  } else if (!on && dot) {
-    dot.remove();
-  }
-}
+function _aiSetThinking(on) { _cmdSetThinking(on); }
 
 async function sendAICommand(text) {
   const apiKey = localStorage.getItem('ai_api_key');
@@ -3069,7 +3063,7 @@ function generateDemoCloud() {
   scene.add(cloud);
   clouds.push(cloud);
   selectCloud(cloud);
-  fitCameraToCloud(cloud);
+  fitCameraToObject(cloud);
   updateCloudList();
   _cmdLog('Escaneig de demo generat: sala de 6×10×3 m, ' + N.toLocaleString() + ' punts.', 'cmd-a');
 }
@@ -3101,13 +3095,6 @@ function _cmdSetThinking(on) {
     dot.remove();
   }
 }
-
-// Override _aiAddMsg to use command line in v2
-function _aiAddMsg(text, cls) {
-  const clsMap = { 'ai-u':'cmd-u', 'ai-a':'cmd-a', 'ai-x':'cmd-x', 'ai-e':'cmd-e' };
-  _cmdLog(text, clsMap[cls] || 'cmd-a');
-}
-function _aiSetThinking(on) { _cmdSetThinking(on); }
 
 function initCmdLine() {
   const cmdLine   = document.getElementById('cmdLine');
@@ -3313,8 +3300,29 @@ function animate() {
 // ─────────────────────────────────────────────
 // Arrencada
 // ─────────────────────────────────────────────
-init();
-setupUI();
-initAccordions();
-initCmdLine();
+window.addEventListener('error', e => {
+  const box = document.getElementById('cmdHistory');
+  if (box) {
+    const d = document.createElement('div');
+    d.style.cssText = 'color:#ff6b6b;font-size:11px;word-break:break-all;';
+    d.textContent = '⚠ JS ERROR: ' + e.message + ' (' + (e.filename||'').split('/').pop() + ':' + e.lineno + ')';
+    box.appendChild(d);
+    box.scrollTop = box.scrollHeight;
+  }
+  const cl = document.getElementById('cmdLine');
+  if (cl) cl.classList.remove('collapsed');
+});
+
+try { init(); } catch(e) { console.error('init() crashed:', e); }
+try { setupUI(); } catch(e) { console.error('setupUI() crashed:', e); }
+try { initAccordions(); } catch(e) { console.error('initAccordions() crashed:', e); }
+try { initCmdLine(); } catch(e) { console.error('initCmdLine() crashed:', e); }
 animate();
+
+// Obre els accordions "Propietats" i "Moure/Rotar" per defecte
+['accMove', 'accAlign'].forEach(id => {
+  const body   = document.getElementById(id + '-body');
+  const header = document.querySelector('[data-acc="' + id + '"]');
+  if (body)   body.classList.add('open');
+  if (header) header.classList.add('open');
+});

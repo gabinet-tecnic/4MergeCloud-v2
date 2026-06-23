@@ -58,7 +58,8 @@
       text-align: center; padding: 14px 8px; cursor: pointer;
       transition: border-color 0.2s, background 0.2s;
     }
-    #loadArea:hover { border-color: #e07820; background: rgba(224,120,32,0.04); }
+    #loadArea:hover, #loadArea.drag-over { border-color: #e07820; background: rgba(224,120,32,0.08); }
+    #viewer.drag-over::after { content: 'Deixa els fitxers aquí'; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(224,120,32,0.15); border: 2px dashed #e07820; font-size: 22px; color: #e07820; pointer-events: none; z-index: 100; }
     .load-title { font-size: 12px; font-weight: 600; color: #ddd; margin-top: 6px; }
     .load-sub { font-size: 10px; color: #555; margin-top: 3px; }
     #fileInput { display: none; }
