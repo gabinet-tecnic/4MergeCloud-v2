@@ -2193,6 +2193,26 @@ function setupUI() {
   orthoBtn('viewA_back',  new THREE.Vector3( 0, 0,-1), new THREE.Vector3(0, 1, 0));
   orthoBtn('viewA_right', new THREE.Vector3( 1, 0, 0), new THREE.Vector3(0, 1, 0));
   orthoBtn('viewA_left',  new THREE.Vector3(-1, 0, 0), new THREE.Vector3(0, 1, 0));
+
+  // ── Traçat 2D → DXF ──
+  ['traceWall','traceDoor','traceWindow'].forEach(id => {
+    const btn = document.getElementById(id);
+    if (!btn) return;
+    btn.onclick = () => {
+      document.querySelectorAll('.trace-btn').forEach(b => b.classList.remove('trace-active'));
+      btn.classList.add('trace-active');
+      const layerMap = { traceWall:'PARETS', traceDoor:'PORTES', traceWindow:'FINESTRES' };
+      setTraceLayer(layerMap[id]);
+    };
+  });
+  const _btnTraceToggle = document.getElementById('traceToggle');
+  if (_btnTraceToggle) _btnTraceToggle.onclick = toggleTracing;
+  const _btnTraceUndo = document.getElementById('traceUndoPt');
+  if (_btnTraceUndo) _btnTraceUndo.onclick = traceUndoPoint;
+  const _btnTraceClear = document.getElementById('traceClearAll');
+  if (_btnTraceClear) _btnTraceClear.onclick = traceClearAll;
+  const _btnTraceExport = document.getElementById('traceExportDXF');
+  if (_btnTraceExport) _btnTraceExport.onclick = traceExportDXF;
 }
 
 // ─────────────────────────────────────────────
@@ -3003,6 +3023,214 @@ INSTRUCCIONS:
 let _aiVoiceRec = null;
 
 // ─────────────────────────────────────────────
+// Traçat 2D → DXF
+// ─────────────────────────────────────────────
+const TRACE_LAYERS = {
+  PARETS:   { color: 0xffffff, dxfColor: 7 },
+  PORTES:   { color: 0x00ccff, dxfColor: 4 },
+  FINESTRES:{ color: 0xffee00, dxfColor: 2 },
+};
+let _tracing       = false;
+let _traceLayer    = 'PARETS';
+let _tracePts      = [];   // current polyline points (THREE.Vector3)
+let _traceSegments = [];   // {layer, points:[V3,...], lineObj}
+let _tracePreview  = null; // THREE.Line preview (mouse hover)
+let _traceCurrentLine = null; // THREE.Line being built
+
+function _traceStatus(msg) {
+  const el = document.getElementById('traceStatus');
+  if (el) el.textContent = msg;
+}
+
+function setTraceLayer(layer) {
+  _traceLayer = layer;
+  if (_tracing) _traceStatus('Capa: ' + layer + ' — fes clic per col·locar punts');
+}
+
+function _traceRaycast(event) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  const nx = ((event.clientX - rect.left) / rect.width)  * 2 - 1;
+  const ny = -((event.clientY - rect.top)  / rect.height) * 2 + 1;
+  const mouse2 = new THREE.Vector2(nx, ny);
+  const rc = new THREE.Raycaster();
+  rc.params.Points = { threshold: 0.15 };
+  const cam = (useOrtho && orthoCamera) ? orthoCamera : camera;
+  rc.setFromCamera(mouse2, cam);
+  const hits = rc.intersectObjects(clouds, false);
+  if (hits.length > 0) return hits[0].point.clone();
+
+  // fallback: project onto Y=0 plane
+  const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+  const target = new THREE.Vector3();
+  rc.ray.intersectPlane(plane, target);
+  return target;
+}
+
+function _buildLineFromPoints(pts, color) {
+  if (pts.length < 2) return null;
+  const geo = new THREE.BufferGeometry().setFromPoints(pts);
+  const mat = new THREE.LineBasicMaterial({ color, depthTest: false, linewidth: 2 });
+  return new THREE.Line(geo, mat);
+}
+
+function _updateCurrentLine() {
+  if (_traceCurrentLine) { scene.remove(_traceCurrentLine); _traceCurrentLine = null; }
+  if (_tracePts.length < 2) return;
+  const cfg = TRACE_LAYERS[_traceLayer];
+  _traceCurrentLine = _buildLineFromPoints([..._tracePts], cfg.color);
+  _traceCurrentLine.renderOrder = 999;
+  scene.add(_traceCurrentLine);
+}
+
+function _updatePreview(worldPt) {
+  if (_tracePreview) { scene.remove(_tracePreview); _tracePreview = null; }
+  if (_tracePts.length === 0 || !worldPt) return;
+  const cfg = TRACE_LAYERS[_traceLayer];
+  const mat = new THREE.LineDashedMaterial({ color: cfg.color, dashSize: 0.1, gapSize: 0.05, depthTest: false });
+  const geo = new THREE.BufferGeometry().setFromPoints([_tracePts[_tracePts.length - 1], worldPt]);
+  _tracePreview = new THREE.Line(geo, mat);
+  _tracePreview.computeLineDistances();
+  _tracePreview.renderOrder = 999;
+  scene.add(_tracePreview);
+}
+
+function toggleTracing() {
+  _tracing = !_tracing;
+  const btn = document.getElementById('traceToggle');
+  const viewer = document.getElementById('viewer');
+  if (_tracing) {
+    btn.textContent = '⏹ Finalitzar Traçat';
+    btn.classList.add('tracing');
+    viewer.classList.add('trace-mode');
+    controls.enabled = false;
+    if (orthoControls) orthoControls.enabled = false;
+    _traceStatus('Capa: ' + _traceLayer + ' — fes clic per col·locar punts. Doble-clic per acabar segment.');
+    // Switch to top view for plan tracing
+    if (!useOrtho) setOrthoView(new THREE.Vector3(0,1,0), new THREE.Vector3(0,0,-1));
+  } else {
+    btn.textContent = '✏ Iniciar Traçat 2D';
+    btn.classList.remove('tracing');
+    viewer.classList.remove('trace-mode');
+    controls.enabled = true;
+    if (orthoControls) orthoControls.enabled = true;
+    if (_tracePreview) { scene.remove(_tracePreview); _tracePreview = null; }
+    // Finish any open polyline
+    if (_tracePts.length >= 2) _traceCommitSegment();
+    else _tracePts = [];
+    _updateCurrentLine();
+    _traceStatus(_traceSegments.length + ' segments traçats');
+  }
+}
+
+function _traceCommitSegment() {
+  if (_tracePts.length < 2) { _tracePts = []; return; }
+  if (_traceCurrentLine) scene.remove(_traceCurrentLine);
+  const cfg = TRACE_LAYERS[_traceLayer];
+  const lineObj = _buildLineFromPoints([..._tracePts], cfg.color);
+  if (lineObj) { lineObj.renderOrder = 999; scene.add(lineObj); }
+  _traceSegments.push({ layer: _traceLayer, points: [..._tracePts], lineObj });
+  _tracePts = [];
+  _traceCurrentLine = null;
+}
+
+function _traceHandleClick(event) {
+  if (!_tracing) return;
+  event.stopPropagation();
+  const pt = _traceRaycast(event);
+  if (!pt) return;
+  _tracePts.push(pt);
+  _updateCurrentLine();
+  _traceStatus('Capa: ' + _traceLayer + ' — ' + _tracePts.length + ' punt(s). Doble-clic per acabar segment.');
+}
+
+function _traceHandleDblClick(event) {
+  if (!_tracing) return;
+  event.stopPropagation();
+  _traceCommitSegment();
+  _updateCurrentLine();
+  _traceStatus('Segment guardat. Fes clic per iniciar-ne un de nou.');
+}
+
+function _traceHandleMouseMove(event) {
+  if (!_tracing || _tracePts.length === 0) return;
+  const pt = _traceRaycast(event);
+  _updatePreview(pt);
+}
+
+function traceUndoPoint() {
+  if (_tracePts.length > 0) {
+    _tracePts.pop();
+    _updateCurrentLine();
+    if (_tracePreview) { scene.remove(_tracePreview); _tracePreview = null; }
+    _traceStatus(_tracePts.length + ' punt(s) en el segment actual');
+    return;
+  }
+  if (_traceSegments.length > 0) {
+    const last = _traceSegments.pop();
+    if (last.lineObj) scene.remove(last.lineObj);
+    _traceStatus(_traceSegments.length + ' segments traçats');
+  }
+}
+
+function traceClearAll() {
+  if (!confirm('Esborrar tots els segments traçats?')) return;
+  _traceSegments.forEach(s => { if (s.lineObj) scene.remove(s.lineObj); });
+  _traceSegments = [];
+  _tracePts = [];
+  if (_traceCurrentLine) { scene.remove(_traceCurrentLine); _traceCurrentLine = null; }
+  if (_tracePreview) { scene.remove(_tracePreview); _tracePreview = null; }
+  _traceStatus('Traçat esborrat');
+}
+
+function traceExportDXF() {
+  const allSegs = [..._traceSegments];
+  // Include open segment if it has points
+  if (_tracePts.length >= 2) allSegs.push({ layer: _traceLayer, points: _tracePts });
+  if (allSegs.length === 0) { alert('No hi ha cap segment traçat per exportar.'); return; }
+
+  const layers = [...new Set(allSegs.map(s => s.layer))];
+  const dxfColorMap = { PARETS: 7, PORTES: 4, FINESTRES: 2 };
+
+  let dxf = '0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1014\n9\n$INSUNITS\n70\n6\n0\nENDSEC\n';
+
+  // TABLES section with layers
+  dxf += '0\nSECTION\n2\nTABLES\n0\nTABLE\n2\nLAYER\n70\n' + layers.length + '\n';
+  layers.forEach(lyr => {
+    dxf += '0\nLAYER\n2\n' + lyr + '\n70\n0\n62\n' + (dxfColorMap[lyr] || 7) + '\n6\nCONTINUOUS\n';
+  });
+  dxf += '0\nENDTAB\n0\nENDSEC\n';
+
+  // ENTITIES section
+  dxf += '0\nSECTION\n2\nENTITIES\n';
+  allSegs.forEach(seg => {
+    const pts = seg.points;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = pts[i], b = pts[i + 1];
+      dxf += '0\nLINE\n8\n' + seg.layer + '\n';
+      dxf += '10\n' + a.x.toFixed(4) + '\n20\n' + a.z.toFixed(4) + '\n30\n0.0\n';
+      dxf += '11\n' + b.x.toFixed(4) + '\n21\n' + b.z.toFixed(4) + '\n31\n0.0\n';
+    }
+  });
+  dxf += '0\nENDSEC\n0\nEOF\n';
+
+  const blob = new Blob([dxf], { type: 'application/dxf' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'tracat_2d.dxf';
+  a.click();
+  URL.revokeObjectURL(url);
+  _traceStatus('DXF exportat: ' + allSegs.length + ' segments');
+}
+
+function initTracing() {
+  const canvas = renderer?.domElement;
+  if (!canvas) return;
+  canvas.addEventListener('click',     _traceHandleClick,     { capture: true });
+  canvas.addEventListener('dblclick',  _traceHandleDblClick,  { capture: true });
+  canvas.addEventListener('mousemove', _traceHandleMouseMove, { passive: true });
+}
+
+// ─────────────────────────────────────────────
 // V2 UI: Accordions
 // ─────────────────────────────────────────────
 function initAccordions() {
@@ -3317,6 +3545,7 @@ try { init(); } catch(e) { console.error('init() crashed:', e); }
 try { setupUI(); } catch(e) { console.error('setupUI() crashed:', e); }
 try { initAccordions(); } catch(e) { console.error('initAccordions() crashed:', e); }
 try { initCmdLine(); } catch(e) { console.error('initCmdLine() crashed:', e); }
+try { initTracing(); } catch(e) { console.error('initTracing() crashed:', e); }
 animate();
 
 // Obre els accordions "Propietats" i "Moure/Rotar" per defecte

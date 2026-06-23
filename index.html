@@ -119,6 +119,12 @@
     .btn-row button { flex: 1; }
     .btn-green { background: #0e2a18 !important; border-color: #1a6a30 !important; color: #6f6 !important; }
     .btn-green:hover { background: #143820 !important; }
+    .trace-layer-row { display:flex; gap:4px; margin-bottom:6px; }
+    .trace-btn { flex:1; font-size:10px; padding:4px 2px; background:#1a1d28; border:1px solid #2a2d40; color:#888; border-radius:4px; cursor:pointer; }
+    .trace-btn:hover { border-color:#e07820; color:#e07820; }
+    .trace-btn.trace-active { background:#1e2a10; border-color:#4a8a20; color:#8f8; }
+    #traceToggle.tracing { background:#2a1010; border-color:#8a2020; color:#f66; }
+    #viewer.trace-mode { cursor:crosshair !important; }
     .btn-blue { background: #0d1e38 !important; border-color: #1a4a8a !important; color: #88ccff !important; }
     .btn-blue:hover { background: #122840 !important; }
     .btn-red { background: #2a0e0e !important; border-color: #7a1a1a !important; color: #f88 !important; }
@@ -600,6 +606,28 @@
         </div>
       </div>
 
+      <!-- TRAÇAT 2D → DXF -->
+      <div class="acc">
+        <div class="acc-header" data-acc="accTrace">
+          <span><span class="acc-icon">&#9998;</span>Traçat 2D &rarr; DXF</span>
+          <span class="acc-arrow">&#9654;</span>
+        </div>
+        <div class="acc-body" id="accTrace-body">
+          <div class="trace-layer-row">
+            <button id="traceWall"   class="trace-btn trace-active">&#9644; Paret</button>
+            <button id="traceDoor"   class="trace-btn">&#9645; Porta</button>
+            <button id="traceWindow" class="trace-btn">&#9643; Finestra</button>
+          </div>
+          <button id="traceToggle" class="btn-orange">&#9998; Iniciar Traçat 2D</button>
+          <div style="display:flex;gap:4px;margin-top:4px">
+            <button id="traceUndoPt" style="flex:1">&#8617; Desfer Punt</button>
+            <button id="traceClearAll" style="flex:1">&#10005; Esborrar Tot</button>
+          </div>
+          <button id="traceExportDXF" style="margin-top:4px;background:#1a3a1a;border-color:#2a6a2a;color:#6f6">&#8659; Exportar DXF</button>
+          <div id="traceStatus" style="font-size:10px;color:#667;margin-top:4px;min-height:14px"></div>
+        </div>
+      </div>
+
     </div><!-- /panelScroll -->
 
     <div id="panelBottom">
@@ -642,12 +670,6 @@
           </li>
         </ul>
         <div class="welcome-actions">
-          <div class="welcome-action" id="waDemoCloud">
-            <div class="wa-icon">&#9889;</div>
-            <div class="wa-title">Generar Escaneig de Prova (Demo)</div>
-            <div class="wa-desc">Crea instantàniament una sala de 15.000 punts procedimentals per investigar les funcions.</div>
-            <span class="wa-link">Començar immediatament →</span>
-          </div>
           <div class="welcome-action" onclick="document.getElementById('fileInput').click()">
             <div class="wa-icon">&#128193;</div>
             <div class="wa-title">Arrossegar o Carregar Fitxer de Punts</div>
@@ -661,6 +683,7 @@
             <span class="wa-link">Importar contorn vector →</span>
           </div>
         </div>
+        <div id="waDemoCloud" style="display:none"></div>
         <p style="font-size:9px;color:#334;margin-top:18px;text-align:right">v1.3.0 (Three.js WebGL)</p>
       </div>
     </div>
