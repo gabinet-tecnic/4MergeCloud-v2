@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Generate icons</title>
+<style>
+body { font-family: sans-serif; padding: 20px; background: #222; color: #eee; }
+button { margin: 6px; padding: 10px 20px; cursor: pointer; font-size: 14px; background: #e07820; color: #fff; border: none; border-radius: 5px; }
+button:hover { background: #c06010; }
+canvas { border: 1px solid #555; margin: 8px; display: block; }
+</style>
+</head>
+<body>
+<h3>4MC Icon Generator</h3>
+<p>Preview:</p>
+<canvas id="c512" width="512" height="512"></canvas>
+<br>
+<button onclick="dl(192)">Download icon-192.png</button>
+<button onclick="dl(512)">Download icon-512.png</button>
+
+<script>
+const svgText = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0f1e3a"/>
+      <stop offset="100%" style="stop-color:#1a3560"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="80" fill="url(#bg)"/>
+  <g fill="#2a4a80" opacity="0.6">
+    <circle cx="80"  cy="180" r="8"/>
+    <circle cx="110" cy="155" r="6"/>
+    <circle cx="95"  cy="210" r="7"/>
+    <circle cx="130" cy="190" r="5"/>
+    <circle cx="115" cy="225" r="6"/>
+    <circle cx="60"  cy="200" r="5"/>
+    <circle cx="390" cy="300" r="8"/>
+    <circle cx="420" cy="280" r="6"/>
+    <circle cx="405" cy="330" r="7"/>
+    <circle cx="440" cy="310" r="5"/>
+    <circle cx="430" cy="345" r="6"/>
+    <circle cx="370" cy="320" r="5"/>
+    <circle cx="200" cy="80"  r="6"/>
+    <circle cx="230" cy="65"  r="5"/>
+    <circle cx="215" cy="100" r="7"/>
+    <circle cx="250" cy="85"  r="5"/>
+    <circle cx="300" cy="420" r="6"/>
+    <circle cx="330" cy="435" r="5"/>
+    <circle cx="315" cy="405" r="7"/>
+    <circle cx="345" cy="415" r="5"/>
+  </g>
+  <text x="256" y="305"
+        font-family="'Arial Black', Arial, sans-serif"
+        font-weight="900"
+        font-size="170"
+        text-anchor="middle"
+        letter-spacing="-6">
+    <tspan fill="#e07820">4</tspan><tspan fill="#ffffff">M</tspan><tspan fill="#e07820">C</tspan>
+  </text>
+  <line x1="90" y1="370" x2="422" y2="370" stroke="#e07820" stroke-width="4" stroke-dasharray="12,6" opacity="0.7"/>
+  <circle cx="90"  cy="370" r="7" fill="#e07820" opacity="0.9"/>
+  <circle cx="422" cy="370" r="7" fill="#e07820" opacity="0.9"/>
+</svg>`;
+
+const blob = new Blob([svgText], { type: 'image/svg+xml' });
+const url  = URL.createObjectURL(blob);
+
+const img = new Image();
+img.onload = () => {
+  const ctx = document.getElementById('c512').getContext('2d');
+  ctx.drawImage(img, 0, 0, 512, 512);
+  URL.revokeObjectURL(url);
+};
+img.src = url;
+
+function dl(size) {
+  const src = document.getElementById('c512');
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  c.getContext('2d').drawImage(src, 0, 0, size, size);
+  const a = document.createElement('a');
+  a.download = 'icon-' + size + '.png';
+  a.href = c.toDataURL('image/png');
+  a.click();
+}
+</script>
+</body>
+</html>

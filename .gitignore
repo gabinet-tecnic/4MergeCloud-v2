@@ -1,0 +1,17 @@
+# Fitxers de dades — no al repositori
+*.xyz
+*.ply
+*.dxf
+*.glb
+*.gltf
+*.obj
+*.e57
+*.las
+*.laz
+
+# Carpetes de proves / esborrany
+proves dxf/
+icons/borrador/
+
+# Scripts auxiliars
+xyz_to_dxf.py

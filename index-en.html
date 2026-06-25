@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>4 Merge Cloud</title>
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#e07820">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="4 Merge Cloud">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; overflow: hidden; font-family: sans-serif; background: #181818; overscroll-behavior: none; }
+    canvas { display: block; touch-action: none; position: absolute; top: 0; left: 0; }
+
+    #viewer {
+      position: absolute;
+      inset: 0;
+    }
+
+    #splitDivider {
+      position: absolute;
+      top: 0; bottom: 0;
+      width: 2px; left: 50%;
+      background: #aaa;
+      pointer-events: none;
+      display: none;
+      z-index: 5;
+    }
+
+    /* ── Controls panel ── */
+    #controls {
+      position: absolute;
+      top: 10px; left: 10px;
+      z-index: 20;
+      background: rgba(24, 24, 24, 0.92);
+      color: #ddd;
+      padding: 8px;
+      border: 1px solid #444;
+      font-size: 13px;
+      border-radius: 8px;
+      width: 200px;
+      user-select: none;
+      max-height: calc(100vh - 20px);
+      overflow-y: auto;
+    }
+
+    #controls button {
+      display: block;
+      width: 100%;
+      margin: 2px 0;
+      padding: 6px 8px;
+      font-size: 12px;
+      background: #333;
+      color: #ddd;
+      border: 1px solid #555;
+      border-radius: 4px;
+      cursor: pointer;
+      text-align: left;
+    }
+    #controls button:hover { background: #484848; }
+    #controls button.active { background: #b05a10; border-color: #d07020; color: #fff; }
+
+    #fileInputLabel {
+      display: block;
+      width: 100%;
+      margin: 2px 0;
+      padding: 6px 8px;
+      font-size: 12px;
+      background: #1a4a7a;
+      color: #eee;
+      border: 1px solid #2a6aaa;
+      border-radius: 4px;
+      cursor: pointer;
+      text-align: center;
+    }
+    #fileInputLabel:hover { background: #2a5a9a; }
+    #fileInput { display: none; }
+
+    .sep { border-top: 1px solid #444; margin: 5px 0; }
+
+    /* Loaded clouds list */
+    #cloudListPanel {
+      max-height: 90px;
+      overflow-y: auto;
+      margin: 3px 0;
+      font-size: 11px;
+    }
+    #cloudListPanel:empty::before {
+      content: 'No clouds loaded';
+      color: #666;
+      display: block;
+      padding: 2px 4px;
+      font-style: italic;
+    }
+    .cloud-item {
+      display: flex;
+      align-items: center;
+      padding: 2px 4px;
+      cursor: pointer;
+      border-radius: 3px;
+      border: 1px solid transparent;
+    }
+    .cloud-item:hover { background: #3a3a3a; }
+    .cloud-item.selected { background: #5a2800; border-color: #b05a10; }
+    .cloud-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .cloud-del { color: #f55; cursor: pointer; padding: 0 4px; flex-shrink: 0; font-size: 13px; line-height: 1; }
+    .cloud-del:hover { color: #ff8888; }
+
+    /* Numeric transform */
+    #numericTransform {
+      display: none;
+      font-size: 11px;
+      background: #222;
+      border: 1px solid #444;
+      border-radius: 4px;
+      padding: 5px;
+      margin: 3px 0;
+    }
+    #numericTransform table { width: 100%; }
+    #numericTransform td { padding: 1px 2px; color: #bbb; }
+    #numericTransform input[type=number] {
+      width: 60px;
+      font-size: 11px;
+      background: #333;
+      color: #eee;
+      border: 1px solid #555;
+      border-radius: 3px;
+      padding: 2px 4px;
+    }
+
+    /* ── Measurements ── */
+    #measureList {
+      position: absolute;
+      bottom: 55px;
+      right: 10px;
+      z-index: 20;
+      background: rgba(24, 24, 24, 0.92);
+      color: #eee;
+      padding: 8px 12px;
+      font-size: 11px;
+      font-family: monospace;
+      border: 1px solid #555;
+      border-radius: 6px;
+      max-width: 300px;
+      white-space: pre;
+      display: none;
+    }
+
+    /* Alignment badge */
+    #alignBadge {
+      position: absolute;
+      top: 42px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0, 140, 80, 0.92);
+      color: #fff;
+      padding: 5px 16px;
+      border-radius: 6px;
+      font-size: 13px;
+      z-index: 25;
+      display: none;
+      pointer-events: none;
+      white-space: nowrap;
+    }
+
+    /* Loading badge */
+    #loadingBadge {
+      position: absolute;
+      top: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0, 80, 180, 0.92);
+      color: #fff;
+      padding: 5px 16px;
+      border-radius: 6px;
+      font-size: 13px;
+      z-index: 25;
+      display: none;
+      pointer-events: none;
+      white-space: nowrap;
+    }
+
+    /* Measure mode badge */
+    #measureBadge {
+      position: absolute;
+      top: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(180, 60, 0, 0.92);
+      color: #fff;
+      padding: 5px 16px;
+      border-radius: 6px;
+      font-size: 13px;
+      z-index: 25;
+      display: none;
+      pointer-events: none;
+      white-space: nowrap;
+    }
+
+    /* ── View toolbars ── */
+    .view-toolbar {
+      position: absolute;
+      bottom: 10px;
+      display: flex;
+      flex-direction: row;
+      gap: 5px;
+      z-index: 15;
+    }
+    .view-toolbar.bottom-left { left: 10px; }
+    .view-toolbar.bottom-right { right: 10px; }
+
+    .view-btn {
+      width: 34px;
+      height: 34px;
+      border: 1px solid #555;
+      background: rgba(30, 30, 30, 0.88);
+      color: #ccc;
+      padding: 0;
+      cursor: pointer;
+      font-size: 10px;
+      font-weight: bold;
+      border-radius: 5px;
+      line-height: 1.2;
+    }
+    .view-btn:hover { background: rgba(70, 70, 70, 0.92); color: #fff; }
+    .view-btn.ortho-active { background: rgba(0, 80, 160, 0.9); border-color: #3a8aff; color: #fff; }
+
+    .hidden { display: none !important; }
+
+    /* Viewer label */
+    .viewer-label {
+      position: absolute;
+      top: 6px;
+      font-size: 11px;
+      color: #888;
+      z-index: 10;
+      pointer-events: none;
+      background: rgba(0,0,0,0.4);
+      padding: 2px 6px;
+      border-radius: 3px;
+    }
+    #labelA { left: 6px; }
+    #labelB { left: calc(50% + 6px); display: none; }
+  </style>
+</head>
+<body>
+
+  <div id="controls">
+    <label id="fileInputLabel" for="fileInput">&#128194; Load (XYZ / PLY)</label>
+    <input type="file" id="fileInput" multiple accept=".xyz,.ply,.txt,text/plain,application/octet-stream">
+
+    <div id="cloudListPanel"></div>
+
+    <div class="sep"></div>
+    <button id="btnUndo" disabled style="background:#2a2a2a;color:#888;">&#8617; Undo</button>
+
+    <div class="sep"></div>
+    <button id="modeTranslate">&#8596; Move cloud</button>
+    <button id="modeRotate">&#8635; Rotate cloud</button>
+
+    <button id="toggleNumeric">&#9881; Numeric transform</button>
+    <div id="numericTransform">
+      <table>
+        <tr><td>X:</td><td><input id="tx" type="number" step="0.001" value="0"></td></tr>
+        <tr><td>Y:</td><td><input id="ty" type="number" step="0.001" value="0"></td></tr>
+        <tr><td>Z:</td><td><input id="tz" type="number" step="0.001" value="0"></td></tr>
+        <tr><td>Rx°:</td><td><input id="rx" type="number" value="0"></td></tr>
+        <tr><td>Ry°:</td><td><input id="ry" type="number" value="0"></td></tr>
+        <tr><td>Rz°:</td><td><input id="rz" type="number" value="0"></td></tr>
+      </table>
+      <button id="applyTransform" style="margin-top:4px">Apply</button>
+    </div>
+
+    <div class="sep"></div>
+    <button id="createClipBox">&#9634; Clipping box</button>
+    <button id="moveClipBox">&#8596; Move box</button>
+    <button id="rotateClipBox">&#8635; Rotate box</button>
+    <button id="removeClipBox">&#10005; Remove box</button>
+
+    <div class="sep"></div>
+    <button id="align2pt">&#8853; Align 2 points</button>
+    <button id="align3pt">&#8853; Align 3 points</button>
+
+    <div class="sep"></div>
+    <button id="toggleMeasure">&#128207; Measure mode</button>
+    <button id="clearMeasures">&#128465; Clear measures</button>
+
+    <div class="sep"></div>
+    <button id="merge">&#8659; Merge &amp; download XYZ</button>
+    <button id="btnReset" style="background:#5a1010;border-color:#aa2020;color:#fcc;">&#9851; Reset all</button>
+
+    <div class="sep"></div>
+    <button id="splitView">&#9646;&#9646; Split screen</button>
+    <button id="singleView">&#9646; Single view</button>
+  </div>
+
+  <div id="viewer">
+    <div id="splitDivider"></div>
+    <div id="labelA" class="viewer-label">Viewer A</div>
+    <div id="labelB" class="viewer-label">Viewer B</div>
+
+    <div id="loadingBadge">&#9203; Loading file...</div>
+    <div id="measureBadge">&#128207; Measure mode — click two points on the cloud</div>
+    <div id="alignBadge"></div>
+
+    <div id="measureList"></div>
+
+    <!-- View toolbar viewer A -->
+    <div id="viewToolbarA" class="view-toolbar bottom-left">
+      <button id="viewA_3d"    class="view-btn" title="3D Perspective">3D</button>
+      <button id="viewA_top"   class="view-btn" title="Top view">TP</button>
+      <button id="viewA_front" class="view-btn" title="Front view">FR</button>
+      <button id="viewA_back"  class="view-btn" title="Back view">BK</button>
+      <button id="viewA_right" class="view-btn" title="Right side">RT</button>
+      <button id="viewA_left"  class="view-btn" title="Left side">LT</button>
+    </div>
+
+    <!-- View toolbar viewer B -->
+    <div id="viewToolbarB" class="view-toolbar bottom-right">
+      <button id="viewB_3d"    class="view-btn" title="3D Perspective (B)">3D</button>
+      <button id="viewB_top"   class="view-btn" title="Top view (B)">TP</button>
+      <button id="viewB_front" class="view-btn" title="Front view (B)">FR</button>
+      <button id="viewB_back"  class="view-btn" title="Back view (B)">BK</button>
+      <button id="viewB_right" class="view-btn" title="Right side (B)">RT</button>
+      <button id="viewB_left"  class="view-btn" title="Left side (B)">LT</button>
+    </div>
+  </div>
+
+  <script>window.APP_LANG = 'en';</script>
+  <script type="module" src="main.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js')
+          .catch(err => console.warn('SW not registered:', err));
+      });
+    }
+  </script>
+</body>
+</html>
