@@ -4,6 +4,80 @@ import { OrbitControls } from './jsm/controls/OrbitControls.js';
 import { TransformControls } from './jsm/controls/TransformControls.js';
 import { loadPLY, loadXYZ } from './loaders/pointcloud_loaders.js';
 
+// ── Parsers OBJ i GLB ────────────────────────────────────────────────────────
+async function loadOBJ(file) {
+  const text = await file.text();
+  const positions = [], colors = [];
+  for (const raw of text.split('\n')) {
+    const p = raw.trim().split(/\s+/);
+    if (p[0] !== 'v' || p.length < 4) continue;
+    positions.push(parseFloat(p[1]), parseFloat(p[2]), parseFloat(p[3]));
+    if (p.length >= 7) {
+      const r = parseFloat(p[4]), g = parseFloat(p[5]), b = parseFloat(p[6]);
+      colors.push(isNaN(r)?1:r, isNaN(g)?1:g, isNaN(b)?1:b);
+    }
+  }
+  if (positions.length === 0) throw new Error('Cap vèrtex trobat al fitxer OBJ');
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
+  const hasCol = colors.length === positions.length;
+  if (hasCol) geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(colors), 3));
+  const mat = new THREE.PointsMaterial({ size: 0.025, vertexColors: hasCol, color: hasCol ? 0xffffff : 0xcccccc });
+  const cloud = new THREE.Points(geo, mat);
+  cloud.name = file.name;
+  return cloud;
+}
+
+async function loadGLB(file) {
+  const buf = await file.arrayBuffer();
+  const dv = new DataView(buf);
+  if (dv.getUint32(0, true) !== 0x46546C67) throw new Error('No és un fitxer GLB vàlid');
+  let offset = 12, jsonBuf = null, binBuf = null;
+  while (offset < buf.byteLength - 8) {
+    const chunkLen  = dv.getUint32(offset, true);
+    const chunkType = dv.getUint32(offset + 4, true);
+    offset += 8;
+    if      (chunkType === 0x4E4F534A) jsonBuf = buf.slice(offset, offset + chunkLen);
+    else if (chunkType === 0x004E4942) binBuf  = buf.slice(offset, offset + chunkLen);
+    offset += chunkLen;
+  }
+  if (!jsonBuf) throw new Error('Chunk JSON no trobat al GLB');
+  const gltf = JSON.parse(new TextDecoder().decode(jsonBuf));
+  const allPos = [], allCol = [];
+  for (const mesh of gltf.meshes || []) {
+    for (const prim of mesh.primitives || []) {
+      const posAcc = gltf.accessors?.[prim.attributes?.POSITION];
+      if (!posAcc || !binBuf) continue;
+      const bv  = gltf.bufferViews[posAcc.bufferView];
+      const off = (bv.byteOffset || 0) + (posAcc.byteOffset || 0);
+      const arr = new Float32Array(binBuf.slice(off, off + posAcc.count * 12));
+      for (let i = 0; i < arr.length; i++) allPos.push(arr[i]);
+      const colAcc = gltf.accessors?.[prim.attributes?.COLOR_0];
+      if (colAcc) {
+        const cbv  = gltf.bufferViews[colAcc.bufferView];
+        const cOff = (cbv.byteOffset || 0) + (colAcc.byteOffset || 0);
+        const comp = colAcc.type === 'VEC4' ? 4 : 3;
+        const ct   = colAcc.componentType;
+        const bytes = ct === 5121 ? 1 : ct === 5123 ? 2 : 4;
+        const raw   = binBuf.slice(cOff, cOff + colAcc.count * comp * bytes);
+        const cArr  = ct === 5126 ? new Float32Array(raw) : ct === 5121 ? new Uint8Array(raw) : new Uint16Array(raw);
+        const scale = ct === 5126 ? 1 : ct === 5121 ? 255 : 65535;
+        for (let i = 0; i < colAcc.count; i++)
+          allCol.push(cArr[i*comp]/scale, cArr[i*comp+1]/scale, cArr[i*comp+2]/scale);
+      }
+    }
+  }
+  if (allPos.length === 0) throw new Error('Cap geometria trobada al GLB');
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(allPos), 3));
+  const hasCol = allCol.length === allPos.length;
+  if (hasCol) geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(allCol), 3));
+  const mat = new THREE.PointsMaterial({ size: 0.025, vertexColors: hasCol, color: hasCol ? 0xffffff : 0xcccccc });
+  const cloud = new THREE.Points(geo, mat);
+  cloud.name = file.name;
+  return cloud;
+}
+
 // ── Textos UI (CA / EN) ──────────────────────────────────────────────────────
 const T = (window.APP_LANG === 'en') ? {
   noCloudLoaded:  'Load a cloud first.',
@@ -1852,8 +1926,10 @@ function setupUI() {
         let cloud = null;
         if (badge) badge.style.display = 'block';
         try {
-          if (ext === 'ply')                       cloud = await loadPLY(file);
+          if      (ext === 'ply')                cloud = await loadPLY(file);
           else if (ext === 'xyz' || ext === 'txt') cloud = await loadXYZ(file);
+          else if (ext === 'obj')                cloud = await loadOBJ(file);
+          else if (ext === 'glb' || ext === 'gltf') cloud = await loadGLB(file);
           else { alert(T.unsupported(ext)); continue; }
         } catch (err) {
           console.error('Error carregant núvol:', err);
