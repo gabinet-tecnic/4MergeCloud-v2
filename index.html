@@ -736,6 +736,14 @@
         </span>
         <button id="cmdToggleBtn">&#9650;</button>
       </div>
+      <!-- API key row - visible when no key saved -->
+      <div id="apiKeyRow" style="display:none; align-items:center; gap:6px; padding:4px 10px; border-bottom:1px solid #1a1d28; background:rgba(224,120,32,0.05); flex-shrink:0;">
+        <span style="font-size:10px; color:#776; flex-shrink:0; white-space:nowrap;">Clau Anthropic API:</span>
+        <input type="password" id="apiKeyInput" placeholder="sk-ant-api03-..." autocomplete="off" spellcheck="false"
+          style="flex:1; min-width:0; background:#0c0e16; border:1px solid #2a2d40; color:#aaa; font-size:11px; padding:3px 7px; border-radius:3px; font-family:monospace;">
+        <button id="apiKeySave" style="font-size:10px; padding:3px 9px; background:#1a2e1a; border:1px solid #2a6a2a; color:#8c8; border-radius:3px; cursor:pointer; white-space:nowrap;">Guardar</button>
+        <button id="apiKeySkip" title="Tancar" style="font-size:11px; background:none; border:none; color:#445; cursor:pointer; padding:0 3px;">✕</button>
+      </div>
       <div id="cmdHistory"></div>
       <div id="cmdInputRow">
         <span class="cmd-prompt">4MC&gt;</span>

@@ -3112,6 +3112,7 @@ let _tracePts      = [];   // current polyline points (THREE.Vector3)
 let _traceSegments = [];   // {layer, points:[V3,...], lineObj}
 let _tracePreview  = null; // THREE.Line preview (mouse hover)
 let _traceCurrentLine = null; // THREE.Line being built
+let _traceClickTimer  = null; // debounce: distinguish click vs dblclick
 
 function _traceStatus(msg) {
   const el = document.getElementById('traceStatus');
@@ -3212,16 +3213,24 @@ function _traceCommitSegment() {
 function _traceHandleClick(event) {
   if (!_tracing) return;
   event.stopPropagation();
-  const pt = _traceRaycast(event);
-  if (!pt) return;
-  _tracePts.push(pt);
-  _updateCurrentLine();
-  _traceStatus('Capa: ' + _traceLayer + ' — ' + _tracePts.length + ' punt(s). Doble-clic per acabar segment.');
+  // Debounce: ignore if this click is the first of a double-click (dblclick cancels the timer)
+  if (_traceClickTimer !== null) return;
+  const savedEvent = { clientX: event.clientX, clientY: event.clientY };
+  _traceClickTimer = setTimeout(() => {
+    _traceClickTimer = null;
+    const pt = _traceRaycast(savedEvent);
+    if (!pt) return;
+    _tracePts.push(pt);
+    _updateCurrentLine();
+    _traceStatus('Capa: ' + _traceLayer + ' — ' + _tracePts.length + ' punt(s). Doble-clic per acabar segment.');
+  }, 220);
 }
 
 function _traceHandleDblClick(event) {
   if (!_tracing) return;
   event.stopPropagation();
+  // Cancel the pending click timer so no extra point is added
+  if (_traceClickTimer !== null) { clearTimeout(_traceClickTimer); _traceClickTimer = null; }
   _traceCommitSegment();
   _updateCurrentLine();
   _traceStatus('Segment guardat. Fes clic per iniciar-ne un de nou.');
@@ -3289,13 +3298,16 @@ function traceExportDXF() {
   });
   dxf += '0\nENDSEC\n0\nEOF\n';
 
+  const filename = 'tracat_2d_' + new Date().toISOString().slice(0,10) + '.dxf';
   const blob = new Blob([dxf], { type: 'application/dxf' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  a.href = url; a.download = 'tracat_2d.dxf';
+  a.href = url; a.download = filename;
+  document.body.appendChild(a);
   a.click();
+  document.body.removeChild(a);
   URL.revokeObjectURL(url);
-  _traceStatus('DXF exportat: ' + allSegs.length + ' segments');
+  _traceStatus('✓ Descarregat: ' + filename + ' (' + allSegs.length + ' segments) → carpeta Descàrregues');
 }
 
 function initTracing() {
@@ -3419,12 +3431,36 @@ function initCmdLine() {
     cmdLine.classList.toggle('collapsed', expanded);
   });
 
+  // API key row
+  const apiKeyRow   = document.getElementById('apiKeyRow');
+  const apiKeyInput = document.getElementById('apiKeyInput');
+  const apiKeySave  = document.getElementById('apiKeySave');
+  const apiKeySkip  = document.getElementById('apiKeySkip');
+
+  if (apiKeyRow) apiKeyRow.style.display = saved ? 'none' : 'flex';
+
+  apiKeySave?.addEventListener('click', () => {
+    const key = apiKeyInput?.value.trim();
+    if (key?.startsWith('sk-')) {
+      localStorage.setItem('ai_api_key', key);
+      if (apiKeyRow) apiKeyRow.style.display = 'none';
+      if (apiKeyInput) apiKeyInput.value = '';
+      cmdLine.classList.remove('collapsed'); cmdLine.classList.add('expanded');
+      _cmdLog('✓ Clau API guardada. Ja pots escriure ordres al Copilot IA.', 'cmd-a');
+    } else {
+      if (apiKeyInput) apiKeyInput.style.border = '1px solid #cc5544';
+      setTimeout(() => { if (apiKeyInput) apiKeyInput.style.border = ''; }, 1500);
+    }
+  });
+
+  apiKeyInput?.addEventListener('keydown', (e) => { if (e.key === 'Enter') apiKeySave?.click(); });
+  apiKeySkip?.addEventListener('click',    () => { if (apiKeyRow) apiKeyRow.style.display = 'none'; });
+
   // First message
   if (saved) {
     _cmdLog('Copilot IA llest. Escriu una ordre o pregunta.', 'cmd-sys');
   } else {
-    _cmdLog('Per activar el Copilot IA, guarda la teva clau API d\'Anthropic:', 'cmd-sys');
-    _cmdLog('Escriu: clau sk-ant-api03-...', 'cmd-sys');
+    _cmdLog('Introdueix la teva clau API Anthropic al camp de dalt per activar el Copilot IA.', 'cmd-sys');
   }
 
   // Send on Enter
