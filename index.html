@@ -614,18 +614,28 @@
           <span class="acc-arrow">&#9654;</span>
         </div>
         <div class="acc-body" id="accTrace-body">
+          <!-- Capa activa -->
           <div class="trace-layer-row">
             <button id="traceWall"   class="trace-btn trace-active">&#9644; Paret</button>
             <button id="traceDoor"   class="trace-btn">&#9645; Porta</button>
             <button id="traceWindow" class="trace-btn">&#9643; Finestra</button>
           </div>
+          <!-- Mode de dibuix -->
+          <div style="display:flex;gap:4px;margin-bottom:5px">
+            <button id="traceModePolyline" class="trace-btn trace-active" title="Clic per afegir vèrtexs">&#9632; Polilínia</button>
+            <button id="traceModeFree"     class="trace-btn"              title="Arrossega per dibuixar lliurement">&#9999; Lliure</button>
+          </div>
+          <!-- Inici/fi -->
           <button id="traceToggle" class="btn-orange">&#9998; Iniciar Traçat 2D</button>
+          <button id="traceClose" style="margin-top:4px;display:none;background:#1a2e1a;border-color:#2a6a2a;color:#8f8">&#10003; Tancar Segment</button>
+          <!-- Desfer / netejar -->
           <div style="display:flex;gap:4px;margin-top:4px">
-            <button id="traceUndoPt" style="flex:1">&#8617; Desfer Punt</button>
+            <button id="traceUndoPt"  style="flex:1">&#8617; Desfer</button>
             <button id="traceClearAll" style="flex:1">&#10005; Esborrar Tot</button>
           </div>
+          <!-- Export -->
           <button id="traceExportDXF" style="margin-top:4px;background:#1a3a1a;border-color:#2a6a2a;color:#6f6">&#8659; Exportar DXF</button>
-          <div id="traceStatus" style="font-size:10px;color:#667;margin-top:4px;min-height:14px"></div>
+          <div id="traceStatus" style="font-size:10px;color:#667;margin-top:5px;min-height:28px;line-height:1.5"></div>
         </div>
       </div>
 
