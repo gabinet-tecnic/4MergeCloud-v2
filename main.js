@@ -3322,61 +3322,149 @@ function traceClearAll() {
   _traceStatusUpdate();
 }
 
+// ── Ajust geomètric: línia i arc (per a exportació neta) ─────────────────────
+
+// PCA per trobar la millor línia recta (retorna endpoints nets i error RMS)
+function _fitLine2D(pts) {
+  const n = pts.length;
+  let mx = 0, mz = 0;
+  for (const p of pts) { mx += p.x; mz += p.z; }
+  mx /= n; mz /= n;
+
+  let sxx = 0, sxz = 0, szz = 0;
+  for (const p of pts) {
+    const dx = p.x - mx, dz = p.z - mz;
+    sxx += dx * dx; sxz += dx * dz; szz += dz * dz;
+  }
+  const angle = 0.5 * Math.atan2(2 * sxz, sxx - szz);
+  const dirX = Math.cos(angle), dirZ = Math.sin(angle);
+
+  let tmin = Infinity, tmax = -Infinity, rms = 0;
+  for (const p of pts) {
+    const t    =  (p.x - mx) * dirX + (p.z - mz) * dirZ;
+    const perp = -(p.x - mx) * dirZ + (p.z - mz) * dirX;
+    rms += perp * perp;
+    if (t < tmin) tmin = t;
+    if (t > tmax) tmax = t;
+  }
+  return {
+    x1: mx + dirX * tmin, z1: mz + dirZ * tmin,
+    x2: mx + dirX * tmax, z2: mz + dirZ * tmax,
+    rms: Math.sqrt(rms / n),
+    len: tmax - tmin,
+  };
+}
+
+// Ajust de cercle (mètode Taubin). Retorna {cx,cz,r,a1,a2,rms} o null
+function _fitArc2D(pts) {
+  const n = pts.length;
+  if (n < 4) return null;
+
+  let mx = 0, mz = 0;
+  for (const p of pts) { mx += p.x; mz += p.z; }
+  mx /= n; mz /= n;
+
+  let Mxx=0, Mzz=0, Mxz=0, Mxxx=0, Mzzz=0, Mxxz=0, Mxzz=0;
+  for (const p of pts) {
+    const x = p.x - mx, z = p.z - mz;
+    Mxx += x*x; Mzz += z*z; Mxz += x*z;
+    Mxxx += x*x*x; Mzzz += z*z*z; Mxxz += x*x*z; Mxzz += x*z*z;
+  }
+  Mxx/=n; Mzz/=n; Mxz/=n; Mxxx/=n; Mzzz/=n; Mxxz/=n; Mxzz/=n;
+
+  const det = Mxx * Mzz - Mxz * Mxz;
+  if (Math.abs(det) < 1e-12) return null;
+
+  const bx = -(Mxxx + Mxzz) / 2;
+  const bz = -(Mxxz + Mzzz) / 2;
+  const cx0 = ( bx * Mzz - bz * Mxz) / det;
+  const cz0 = (-bx * Mxz + bz * Mxx) / det;
+  const cx = cx0 + mx, cz = cz0 + mz;
+
+  let r = 0;
+  for (const p of pts) r += Math.hypot(p.x - cx, p.z - cz);
+  r /= n;
+
+  // Radi massa gran = pràcticament una línia recta
+  const lineFit = _fitLine2D(pts);
+  if (r > lineFit.len * 20) return null;
+
+  let rms = 0;
+  for (const p of pts) { const d = Math.hypot(p.x - cx, p.z - cz) - r; rms += d*d; }
+  rms = Math.sqrt(rms / n);
+
+  // Angles inici i fi (en graus, sentit antihorari)
+  const a1 = (Math.atan2(pts[0].z - cz, pts[0].x - cx) * 180 / Math.PI + 360) % 360;
+  const a2 = (Math.atan2(pts[n-1].z - cz, pts[n-1].x - cx) * 180 / Math.PI + 360) % 360;
+
+  return { cx, cz, r, a1, a2, rms };
+}
+
+// Decideix si un segment s'ha d'exportar com a LINE o ARC
+function _fitSegment(pts) {
+  if (pts.length < 2) return null;
+  if (pts.length === 2) return { type: 'line', ...pts[0], ...{ x1:pts[0].x,z1:pts[0].z,x2:pts[1].x,z2:pts[1].z } };
+
+  const line = _fitLine2D(pts);
+  const arc  = _fitArc2D(pts);
+
+  // Usa arc si l'error és < 40% de l'error de línia i és un arc visible
+  if (arc && arc.rms < line.rms * 0.4 && arc.rms < line.len * 0.05) {
+    return { type: 'arc', ...arc };
+  }
+  return { type: 'line', ...line };
+}
+
 // ── DXF export ────────────────────────────────────────────────────────────────
 function traceExportDXF() {
-  // Include any open segment
   if (_tracePts.length >= 2) _traceCommitSegment();
 
   if (_traceSegments.length === 0) {
-    _traceStatusUpdate();
     alert('No hi ha cap segment traçat per exportar.\nDibuixa alguna línia primer.');
     return;
   }
 
-  const allSegs = _traceSegments;
-  const layers  = [...new Set(allSegs.map(s => s.layer))];
+  const allSegs  = _traceSegments;
+  const layers   = [...new Set(allSegs.map(s => s.layer))];
   const colorMap = { PARETS: 7, PORTES: 4, FINESTRES: 2 };
-  const R = '\r\n'; // DXF standard line ending
+  const R = '\r\n';
 
   let dxf = '';
-  // HEADER
-  dxf += '0' + R + 'SECTION' + R + '2' + R + 'HEADER' + R;
-  dxf += '9' + R + '$ACADVER' + R + '1' + R + 'AC1009' + R;
-  dxf += '0' + R + 'ENDSEC' + R;
+  dxf += '0'+R+'SECTION'+R+'2'+R+'HEADER'+R;
+  dxf += '9'+R+'$ACADVER'+R+'1'+R+'AC1009'+R;
+  dxf += '0'+R+'ENDSEC'+R;
 
-  // TABLES
-  dxf += '0' + R + 'SECTION' + R + '2' + R + 'TABLES' + R;
-  dxf += '0' + R + 'TABLE' + R + '2' + R + 'LAYER' + R + '70' + R + layers.length + R;
+  dxf += '0'+R+'SECTION'+R+'2'+R+'TABLES'+R;
+  dxf += '0'+R+'TABLE'+R+'2'+R+'LAYER'+R+'70'+R+layers.length+R;
   layers.forEach(lyr => {
-    dxf += '0' + R + 'LAYER' + R;
-    dxf += '2' + R + lyr + R;
-    dxf += '70' + R + '0' + R;
-    dxf += '62' + R + (colorMap[lyr] || 7) + R;
-    dxf += '6' + R + 'CONTINUOUS' + R;
+    dxf += '0'+R+'LAYER'+R+'2'+R+lyr+R+'70'+R+'0'+R+'62'+R+(colorMap[lyr]||7)+R+'6'+R+'CONTINUOUS'+R;
   });
-  dxf += '0' + R + 'ENDTAB' + R;
-  dxf += '0' + R + 'ENDSEC' + R;
+  dxf += '0'+R+'ENDTAB'+R+'0'+R+'ENDSEC'+R;
 
-  // ENTITIES
-  dxf += '0' + R + 'SECTION' + R + '2' + R + 'ENTITIES' + R;
-  let lineCount = 0;
+  dxf += '0'+R+'SECTION'+R+'2'+R+'ENTITIES'+R;
+
+  let nLines = 0, nArcs = 0;
   allSegs.forEach(seg => {
-    const pts = seg.points;
-    for (let i = 0; i < pts.length - 1; i++) {
-      const a = pts[i], b = pts[i + 1];
-      dxf += '0' + R + 'LINE' + R;
-      dxf += '8' + R + seg.layer + R;
-      dxf += '10' + R + a.x.toFixed(4) + R;
-      dxf += '20' + R + a.z.toFixed(4) + R;
-      dxf += '30' + R + '0.0' + R;
-      dxf += '11' + R + b.x.toFixed(4) + R;
-      dxf += '21' + R + b.z.toFixed(4) + R;
-      dxf += '31' + R + '0.0' + R;
-      lineCount++;
+    const fit = _fitSegment(seg.points);
+    if (!fit) return;
+
+    if (fit.type === 'line') {
+      dxf += '0'+R+'LINE'+R+'8'+R+seg.layer+R;
+      dxf += '10'+R+fit.x1.toFixed(4)+R+'20'+R+fit.z1.toFixed(4)+R+'30'+R+'0.0'+R;
+      dxf += '11'+R+fit.x2.toFixed(4)+R+'21'+R+fit.z2.toFixed(4)+R+'31'+R+'0.0'+R;
+      nLines++;
+    } else {
+      // ARC: center, radius, start/end angle
+      dxf += '0'+R+'ARC'+R+'8'+R+seg.layer+R;
+      dxf += '10'+R+fit.cx.toFixed(4)+R+'20'+R+fit.cz.toFixed(4)+R+'30'+R+'0.0'+R;
+      dxf += '40'+R+fit.r.toFixed(4)+R;
+      dxf += '50'+R+fit.a1.toFixed(4)+R;
+      dxf += '51'+R+fit.a2.toFixed(4)+R;
+      nArcs++;
     }
   });
-  dxf += '0' + R + 'ENDSEC' + R;
-  dxf += '0' + R + 'EOF' + R;
+
+  dxf += '0'+R+'ENDSEC'+R+'0'+R+'EOF'+R;
 
   const filename = 'tracat_' + new Date().toISOString().slice(0, 10) + '.dxf';
   const blob = new Blob([dxf], { type: 'application/dxf' });
@@ -3385,8 +3473,9 @@ function traceExportDXF() {
   a.href = url; a.download = filename;
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   URL.revokeObjectURL(url);
+
   document.getElementById('traceStatus').textContent =
-    '✓ ' + filename + ' — ' + allSegs.length + ' segments, ' + lineCount + ' línies DXF';
+    '✓ ' + filename + ' — ' + nLines + ' línies' + (nArcs > 0 ? ', ' + nArcs + ' arcs' : '') + ' (geometria ajustada)';
 }
 
 function initTracing() {
