@@ -4,6 +4,13 @@ import { OrbitControls } from './jsm/controls/OrbitControls.js';
 import { TransformControls } from './jsm/controls/TransformControls.js';
 import { loadPLY, loadXYZ } from './loaders/pointcloud_loaders.js';
 
+// ── Versió i feature flags ────────────────────────────────────────────────────
+const APP_VERSION = '2.1.0';
+const FEATURES = {
+  segmentacioSemantica: false,  // RANSAC + classificació per tipus
+  completatBuits:       false,  // omplir forats basant-se en semàntica
+};
+
 // ── Parsers OBJ i GLB ────────────────────────────────────────────────────────
 async function loadOBJ(file) {
   const text = await file.text();
@@ -3652,6 +3659,10 @@ window.addEventListener('error', e => {
   const cl = document.getElementById('cmdLine');
   if (cl) cl.classList.remove('collapsed');
 });
+
+// Mostra versió a la capçalera
+const _vEl = document.getElementById('appVersion');
+if (_vEl) _vEl.textContent = 'v' + APP_VERSION;
 
 try { init(); } catch(e) { console.error('init() crashed:', e); }
 try { setupUI(); } catch(e) { console.error('setupUI() crashed:', e); }
