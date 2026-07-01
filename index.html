@@ -268,6 +268,67 @@
     #viewer.lasso-active { cursor: crosshair; }
     #viewer.annotate-active { cursor: crosshair; }
 
+    /* Draw Overlay (2D canvas for freehand → DXF) */
+    #drawOverlay {
+      position: absolute; inset: 0;
+      z-index: 14;
+      pointer-events: none;
+      cursor: crosshair;
+      touch-action: none;
+    }
+
+    /* Floating Draw Bar */
+    #drawFloatBar {
+      position: absolute;
+      bottom: 68px; right: 12px;
+      z-index: 20;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 6px;
+    }
+    #drawFloatBtn {
+      background: #1a7a3a;
+      color: #fff;
+      border: none;
+      border-radius: 10px;
+      padding: 10px 18px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      box-shadow: 0 2px 10px rgba(0,0,0,.5);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    #drawFloatBtn.active { background: #8b2020; }
+    #drawFloatTools {
+      background: rgba(14,18,26,.93);
+      border: 1px solid #2a3a4a;
+      border-radius: 12px;
+      padding: 12px;
+      display: none;
+      flex-direction: column;
+      gap: 8px;
+      min-width: 190px;
+      box-shadow: 0 4px 20px rgba(0,0,0,.6);
+    }
+    #drawFloatTools select,
+    #drawFloatTools button {
+      width: 100%;
+      padding: 8px 10px;
+      border-radius: 7px;
+      border: 1px solid #2a3a4a;
+      background: #1a2230;
+      color: #cde;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    #drawFloatTools button:hover { background: #233040; }
+    #drawExportBtn { background: #1a4070 !important; color: #adf !important; font-weight: 700; }
+    #drawExportBtn:hover { background: #1e5090 !important; }
+    #drawSegCount { color: #7a9; font-size: 11px; text-align: center; }
+
     /* Badges */
     .badge {
       position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
@@ -701,6 +762,24 @@
 
     <canvas id="lassoCanvas"></canvas>
     <canvas id="annotateCanvas"></canvas>
+    <canvas id="drawOverlay"></canvas>
+
+    <!-- Floating Draw Bar -->
+    <div id="drawFloatBar">
+      <div id="drawFloatTools">
+        <select id="drawLayerSel">
+          <option value="0">🔴 Parets</option>
+          <option value="1">🔵 Obertures / Finestres</option>
+          <option value="2">🟢 Mobiliari</option>
+          <option value="3">🟡 Lliure / Anotació</option>
+        </select>
+        <button id="drawUndoBtn">↩ Desfer traç</button>
+        <button id="drawExportBtn">⬇ Exportar DXF</button>
+        <div id="drawSegCount"></div>
+        <button id="drawCloseBtn">✕ Sortir del dibuix</button>
+      </div>
+      <button id="drawFloatBtn">✏ Dibuix</button>
+    </div>
 
     <div id="loadingBadge"  class="badge">&#9203; Carregant fitxer...</div>
     <div id="measureBadge"  class="badge">&#128207; Mode mesura — fes clic a dos punts del núvol</div>

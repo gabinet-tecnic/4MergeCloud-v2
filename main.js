@@ -242,7 +242,7 @@ function init() {
   camera = new THREE.PerspectiveCamera(60, width / height, 0.01, 1e7);
   camera.position.set(0, 0, 5);
 
-  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(width, height);
   renderer.localClippingEnabled = true;
@@ -2784,6 +2784,210 @@ function onMouseWheel(event) {
 }
 
 // ─────────────────────────────────────────────
+// Edició semàntica per visió IA
+// ─────────────────────────────────────────────
+
+function _captureSceneImage() {
+  // Renderitza la vista de planta i retorna base64 JPEG
+  const cam = (useOrtho && orthoCamera) ? orthoCamera : camera;
+  renderer.render(scene, cam);
+  return renderer.domElement.toDataURL('image/jpeg', 0.85).split(',')[1];
+}
+
+function _cloudWorldBBox() {
+  const box = new THREE.Box3();
+  const targets = clouds.length > 0 ? clouds : [];
+  targets.forEach(c => box.expandByObject(c));
+  return box.isEmpty() ? null : box;
+}
+
+// Detecta alçada del terra (5è percentil de Y excloent la bbox donada)
+function _detectFloorY(cloud, excludeBBoxes) {
+  const pos = cloud.geometry.getAttribute('position');
+  const ys = [];
+  for (let i = 0; i < pos.count; i++) {
+    const px = pos.getX(i), pz = pos.getZ(i);
+    let inBbox = false;
+    for (const b of excludeBBoxes) {
+      if (px >= b.wx1 && px <= b.wx2 && pz >= b.wz1 && pz <= b.wz2) { inBbox = true; break; }
+    }
+    if (!inBbox) ys.push(pos.getY(i));
+  }
+  if (ys.length === 0) return 0;
+  ys.sort((a, b) => a - b);
+  return ys[Math.floor(ys.length * 0.05)];
+}
+
+function _applySemanticOp(cloud, operacio, worldObjs, colorHex) {
+  const pos = cloud.geometry.getAttribute('position');
+  const col = cloud.geometry.getAttribute('color');
+  const n   = pos.count;
+
+  // Màscara de punts afectats
+  const affected = new Uint8Array(n);
+  let count = 0;
+  for (let i = 0; i < n; i++) {
+    const px = pos.getX(i), pz = pos.getZ(i);
+    for (const obj of worldObjs) {
+      if (px >= obj.wx1 && px <= obj.wx2 && pz >= obj.wz1 && pz <= obj.wz2) {
+        affected[i] = 1; count++; break;
+      }
+    }
+  }
+  if (count === 0) return 0;
+
+  if (operacio === 'seleccionar' || operacio === 'canviar_color') {
+    // Pinta en taronja (seleccionar) o en el color indicat
+    let r = 1.0, g = 0.5, b = 0.0;
+    if (operacio === 'canviar_color' && colorHex) {
+      r = parseInt(colorHex.slice(1,3),16)/255;
+      g = parseInt(colorHex.slice(3,5),16)/255;
+      b = parseInt(colorHex.slice(5,7),16)/255;
+    }
+    const arr = col ? col.array.slice() : new Float32Array(n * 3).fill(0.7);
+    for (let i = 0; i < n; i++) {
+      if (affected[i]) { arr[i*3]=r; arr[i*3+1]=g; arr[i*3+2]=b; }
+    }
+    cloud.geometry.setAttribute('color', new THREE.BufferAttribute(arr, 3));
+    cloud.material.vertexColors = true;
+    cloud.material.needsUpdate = true;
+
+  } else if (operacio === 'eliminar' || operacio === 'substituir_terra') {
+    const floorY = operacio === 'substituir_terra'
+      ? _detectFloorY(cloud, worldObjs) : 0;
+
+    // Punt d'espaiat per la substitució de terra (~densitat original)
+    const spacing = Math.sqrt(
+      (worldObjs.reduce((s,b)=>(s+(b.wx2-b.wx1)*(b.wz2-b.wz1)),0)) / Math.max(count,1)
+    ) * 0.3 || 0.05;
+
+    const nX=[], nY=[], nZ=[], nR=[], nG=[], nB=[];
+    const hasCol = !!col;
+
+    for (let i = 0; i < n; i++) {
+      if (!affected[i]) {
+        nX.push(pos.getX(i)); nY.push(pos.getY(i)); nZ.push(pos.getZ(i));
+        if (hasCol) { nR.push(col.getX(i)); nG.push(col.getY(i)); nB.push(col.getZ(i)); }
+        else { nR.push(0.7); nG.push(0.7); nB.push(0.7); }
+      }
+    }
+
+    if (operacio === 'substituir_terra') {
+      for (const b of worldObjs) {
+        for (let px = b.wx1; px <= b.wx2; px += spacing) {
+          for (let pz = b.wz1; pz <= b.wz2; pz += spacing) {
+            nX.push(px); nY.push(floorY); nZ.push(pz);
+            nR.push(0.55); nG.push(0.55); nB.push(0.55);
+          }
+        }
+      }
+    }
+
+    const newPos = new Float32Array(nX.length * 3);
+    const newCol = new Float32Array(nX.length * 3);
+    for (let i = 0; i < nX.length; i++) {
+      newPos[i*3]=nX[i]; newPos[i*3+1]=nY[i]; newPos[i*3+2]=nZ[i];
+      newCol[i*3]=nR[i]; newCol[i*3+1]=nG[i]; newCol[i*3+2]=nB[i];
+    }
+    cloud.geometry.setAttribute('position', new THREE.BufferAttribute(newPos, 3));
+    cloud.geometry.setAttribute('color',    new THREE.BufferAttribute(newCol, 3));
+    cloud.material.vertexColors = true;
+    cloud.material.needsUpdate  = true;
+    cloud.geometry.computeBoundingBox();
+    cloud.geometry.computeBoundingSphere();
+  }
+
+  return count;
+}
+
+async function _semanticVisionEdit(query, operacio, colorHex) {
+  const apiKey = localStorage.getItem('ai_api_key');
+  if (!apiKey) return 'Cal una clau API per a les ordres semàntiques.';
+  if (clouds.length === 0) return 'Primer carrega un núvol de punts.';
+
+  // Assegura vista de planta
+  if (!useOrtho) setOrthoView(new THREE.Vector3(0,1,0), new THREE.Vector3(0,0,-1));
+
+  _cmdLog('📷 Capturant vista de planta…', 'cmd-sys');
+  const img64 = _captureSceneImage();
+  const bbox  = _cloudWorldBBox();
+  if (!bbox) return 'No s\'ha pogut calcular els límits del núvol.';
+
+  const sysPrompt = `Ets un expert en interpretació visual de núvols de punts 3D (vista de planta).
+Analitza la imatge i localitza els objectes demanats.
+Retorna ÚNICAMENT un JSON vàlid, sense text addicional:
+{
+  "objectes": [
+    {"tipus": "nom_objecte", "bbox_norm": {"x1":0.0,"z1":0.0,"x2":1.0,"z2":1.0}}
+  ],
+  "resposta": "text breu explicatiu"
+}
+Les coordenades bbox_norm van de 0.0 (esquerra/dalt) a 1.0 (dreta/baix) en la imatge.
+Si no trobes els objectes, retorna objectes=[].`;
+
+  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'content-type': 'application/json',
+      'anthropic-dangerous-direct-browser-access': 'true'
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 1024,
+      system: sysPrompt,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: img64 } },
+          { type: 'text',  text: `Identifica i retorna la posició de: ${query}` }
+        ]
+      }]
+    })
+  });
+
+  if (!resp.ok) {
+    const err = await resp.json().catch(()=>({}));
+    return 'Error API Vision: ' + (err.error?.message || resp.statusText);
+  }
+
+  const data = await resp.json();
+  const raw  = data.content?.[0]?.text || '';
+  const jsonMatch = raw.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) return 'La IA no ha retornat un format vàlid.';
+
+  let parsed;
+  try { parsed = JSON.parse(jsonMatch[0]); }
+  catch { return 'Error parsejant la resposta de la IA.'; }
+
+  if (!parsed.objectes || parsed.objectes.length === 0)
+    return `No s'han trobat objectes del tipus "${query}" a la vista actual.`;
+
+  // Converteix coordenades normalitzades → coordenades món
+  const rangeX = bbox.max.x - bbox.min.x;
+  const rangeZ = bbox.max.z - bbox.min.z;
+  const worldObjs = parsed.objectes.map(o => ({
+    tipus: o.tipus,
+    wx1: bbox.min.x + o.bbox_norm.x1 * rangeX,
+    wx2: bbox.min.x + o.bbox_norm.x2 * rangeX,
+    wz1: bbox.min.z + o.bbox_norm.z1 * rangeZ,
+    wz2: bbox.min.z + o.bbox_norm.z2 * rangeZ,
+  }));
+
+  _cmdLog(`🔍 ${parsed.resposta || parsed.objectes.length + ' objecte(s) trobat(s)'}`, 'cmd-x');
+
+  const targetClouds = selectedCloud ? [selectedCloud] : clouds;
+  let total = 0;
+  for (const cloud of targetClouds) {
+    total += _applySemanticOp(cloud, operacio, worldObjs, colorHex);
+  }
+
+  const opLabel = { seleccionar:'seleccionats (taronja)', eliminar:'eliminats', substituir_terra:'substituïts pel terra', canviar_color:'repintats' };
+  return `✓ ${total.toLocaleString()} punts ${opLabel[operacio] || operacio} en ${parsed.objectes.length} zona(es).`;
+}
+
+// ─────────────────────────────────────────────
 // ─────────────────────────────────────────────
 // AI Assistant — Claude API integration
 // ─────────────────────────────────────────────
@@ -2885,6 +3089,19 @@ const AI_TOOLS = [
     name: 'get_app_state',
     description: 'Report the current state: clouds loaded, selected cloud, number of points. Use for: "quins núvols hi ha?/quants punts?/estat de l\'app/qué hay cargado?".',
     input_schema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'semantic_vision_edit',
+    description: 'Use Claude Vision to identify objects visually in the point cloud and edit them. Use for any command that refers to real-world objects by name: "selecciona els llits", "elimina el mobiliari", "substitueix les cadires pel terra", "identifica les taules", "marca les columnes de vermell", "elimina la vegetació". This tool captures the current view as an image and asks Vision AI to locate the objects.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query:   { type: 'string', description: 'What to find visually in the cloud (e.g. "llits", "cadires i taules", "vegetació")' },
+        operacio: { type: 'string', enum: ['seleccionar','eliminar','substituir_terra','canviar_color'], description: 'seleccionar=highlight orange, eliminar=delete points, substituir_terra=replace with floor level, canviar_color=paint a color' },
+        color:   { type: 'string', description: 'Hex color like #ff0000, only needed for canviar_color' }
+      },
+      required: ['query', 'operacio']
+    }
   }
 ];
 
@@ -2973,6 +3190,9 @@ async function _executeAITool(name, input) {
         : st.clouds.map(c => `• ${c.name} (${c.points.toLocaleString()} pts)${c.selected ? ' ← seleccionat' : ''}`).join('\n');
       return desc;
     }
+    case 'semantic_vision_edit': {
+      return await _semanticVisionEdit(input.query, input.operacio, input.color);
+    }
     default:
       return `Eina desconeguda: ${name}`;
   }
@@ -2991,9 +3211,10 @@ const _aiToolLabels = {
   start_erase_tool:    'Activant eina d\'esborrat',
   toggle_annotation:   'Mode de dibuix',
   undo_last_action:    'Desfent acció',
-  merge_and_download:  'Fusionant i descarregant',
-  export_section_dxf:  'Exportant secció DXF',
-  get_app_state:       'Consultant estat'
+  merge_and_download:   'Fusionant i descarregant',
+  export_section_dxf:   'Exportant secció DXF',
+  get_app_state:        'Consultant estat',
+  semantic_vision_edit: '🔍 Analitzant núvol per visió IA…'
 };
 
 function _aiAddMsg(text, cls) {
@@ -3271,7 +3492,8 @@ const FREE_MIN_DIST = 0.05; // metres between sampled points
 
 function _traceFreeDn(event) {
   if (!_tracing || _traceMode !== 'free') return;
-  event.stopPropagation();
+  event.preventDefault();
+  event.stopImmediatePropagation(); // prevent Three.js onPointerDown on same element
   _traceFreeDown = true;
   _traceFreeLastPt = null;
   _tracePts = [];
@@ -3281,6 +3503,7 @@ function _traceFreeDn(event) {
 
 function _traceFreeMv(event) {
   if (!_tracing || _traceMode !== 'free' || !_traceFreeDown) return;
+  event.preventDefault(); // prevent page scroll during draw on touch
   const pt = _traceRaycast(event.clientX, event.clientY);
   if (!pt) return;
   if (!_traceFreeLastPt || pt.distanceTo(_traceFreeLastPt) > FREE_MIN_DIST) {
@@ -3486,10 +3709,11 @@ function initTracing() {
   canvas.addEventListener('click',     _tracePolyClick, { capture: true });
   canvas.addEventListener('mousemove', _tracePolyMove,  { passive: true });
 
-  // Free-draw mode
-  canvas.addEventListener('mousedown', _traceFreeDn, { capture: true });
-  canvas.addEventListener('mousemove', _traceFreeMv, { passive: true });
-  canvas.addEventListener('mouseup',   _traceFreeUp, { capture: true });
+  // Free-draw mode — pointer events work for mouse, touch and stylus
+  canvas.addEventListener('pointerdown',   _traceFreeDn, { capture: true });
+  canvas.addEventListener('pointermove',   _traceFreeMv, { capture: true });
+  canvas.addEventListener('pointerup',     _traceFreeUp, { capture: true });
+  canvas.addEventListener('pointercancel', _traceFreeUp, { capture: true });
 
   // Buttons
   const closeBtn = document.getElementById('traceClose');
@@ -3499,6 +3723,142 @@ function initTracing() {
   const mFreeBtn = document.getElementById('traceModeFree');
   if (mPolyBtn) mPolyBtn.addEventListener('click', () => setTraceMode('polyline'));
   if (mFreeBtn) mFreeBtn.addEventListener('click', () => setTraceMode('free'));
+}
+
+// ─────────────────────────────────────────────
+// Draw Overlay — 2D freehand canvas → DXF
+// ─────────────────────────────────────────────
+let _dCtx         = null;
+let _dActive      = false;
+let _dStroke      = []; // [{clientX, clientY}] current stroke screen coords
+let _dLayer       = 0;
+
+const _D_LAYER_COLORS = ['#ff4444', '#4488ff', '#44cc66', '#ffcc00'];
+
+function initDrawOverlay() {
+  const overlay = document.getElementById('drawOverlay');
+  if (!overlay) return;
+  const viewer  = document.getElementById('viewer');
+
+  function _syncSize() {
+    const dpr = window.devicePixelRatio || 1;
+    const w = viewer.clientWidth;
+    const h = viewer.clientHeight;
+    overlay.width  = w * dpr;
+    overlay.height = h * dpr;
+    overlay.style.width  = w + 'px';
+    overlay.style.height = h + 'px';
+    _dCtx = overlay.getContext('2d');
+    _dCtx.scale(dpr, dpr);
+  }
+  requestAnimationFrame(_syncSize); // defer until layout is ready
+  window.addEventListener('resize', _syncSize);
+
+  overlay.addEventListener('pointerdown',   _dDn, { capture: true });
+  overlay.addEventListener('pointermove',   _dMv, { capture: true });
+  overlay.addEventListener('pointerup',     _dUp, { capture: true });
+  overlay.addEventListener('pointercancel', _dUp, { capture: true });
+
+  document.getElementById('drawFloatBtn')?.addEventListener('click', toggleDrawOverlay);
+  document.getElementById('drawCloseBtn')?.addEventListener('click', toggleDrawOverlay);
+  document.getElementById('drawLayerSel')?.addEventListener('change', e => {
+    _dLayer = parseInt(e.target.value);
+    _traceLayer = _dLayer;
+  });
+  document.getElementById('drawUndoBtn')?.addEventListener('click', _dUndo);
+  document.getElementById('drawExportBtn')?.addEventListener('click', traceExportDXF);
+}
+
+function toggleDrawOverlay() {
+  _dActive = !_dActive;
+  const overlay = document.getElementById('drawOverlay');
+  const tools   = document.getElementById('drawFloatTools');
+  const btn     = document.getElementById('drawFloatBtn');
+
+  if (_dActive) {
+    overlay.style.pointerEvents = 'auto';
+    tools.style.display = 'flex';
+    btn.textContent = '⏹ Aturar';
+    btn.classList.add('active');
+    // Enter top-down ortho + disable orbit
+    _tracing = true;
+    controls.enabled = false;
+    if (orthoControls) orthoControls.enabled = false;
+    if (!useOrtho) setOrthoView(new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, -1));
+    _dUpdateCount();
+  } else {
+    overlay.style.pointerEvents = 'none';
+    if (_dCtx) _dCtx.clearRect(0, 0, overlay.width / (window.devicePixelRatio||1), overlay.height / (window.devicePixelRatio||1));
+    tools.style.display = 'none';
+    btn.textContent = '✏ Dibuix';
+    btn.classList.remove('active');
+    // Commit any pending, re-enable orbit
+    if (_tracePts.length >= 2) _traceCommitSegment();
+    else { _tracePts = []; _updateCurrentLine(); }
+    _tracing = false;
+    controls.enabled = true;
+    if (orthoControls) orthoControls.enabled = true;
+  }
+}
+
+function _dDn(event) {
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  _dStroke = [{ clientX: event.clientX, clientY: event.clientY }];
+  const color = _D_LAYER_COLORS[_dLayer] || '#ff4444';
+  const overlay = document.getElementById('drawOverlay');
+  const r = overlay.getBoundingClientRect();
+  _dCtx.clearRect(0, 0, overlay.width, overlay.height); // clear previous ghost stroke
+  _dCtx.beginPath();
+  _dCtx.moveTo(event.clientX - r.left, event.clientY - r.top);
+  _dCtx.strokeStyle = color;
+  _dCtx.lineWidth = 2.5;
+  _dCtx.lineCap = 'round';
+  _dCtx.lineJoin = 'round';
+  _dCtx.globalAlpha = 0.85;
+}
+
+function _dMv(event) {
+  if (!_dStroke.length) return;
+  event.preventDefault();
+  _dStroke.push({ clientX: event.clientX, clientY: event.clientY });
+  const r = document.getElementById('drawOverlay').getBoundingClientRect();
+  _dCtx.lineTo(event.clientX - r.left, event.clientY - r.top);
+  _dCtx.stroke();
+}
+
+function _dUp(event) {
+  if (!_dStroke.length) return;
+  event.preventDefault();
+  // Project every screen point to 3D world
+  _tracePts = _dStroke.map(p => _traceRaycast(p.clientX, p.clientY)).filter(Boolean);
+  _dStroke = [];
+  // Clear ghost stroke (3D committed line takes over visually)
+  const overlay = document.getElementById('drawOverlay');
+  const dpr = window.devicePixelRatio || 1;
+  _dCtx.clearRect(0, 0, overlay.width / dpr, overlay.height / dpr);
+  if (_tracePts.length >= 2) {
+    _traceLayer = _dLayer;
+    _traceCommitSegment();
+    _dUpdateCount();
+  } else {
+    _tracePts = [];
+  }
+}
+
+function _dUndo() {
+  if (!_traceSegments.length) return;
+  const seg = _traceSegments.pop();
+  if (seg.lineObj) scene.remove(seg.lineObj);
+  _traceStatusUpdate();
+  _dUpdateCount();
+}
+
+function _dUpdateCount() {
+  const el = document.getElementById('drawSegCount');
+  if (!el) return;
+  const n = _traceSegments.length;
+  el.textContent = n === 0 ? '' : n + ' traç' + (n > 1 ? 'os dibuixats' : ' dibuixat');
 }
 
 // ─────────────────────────────────────────────
@@ -3845,6 +4205,7 @@ try { setupUI(); } catch(e) { console.error('setupUI() crashed:', e); }
 try { initAccordions(); } catch(e) { console.error('initAccordions() crashed:', e); }
 try { initCmdLine(); } catch(e) { console.error('initCmdLine() crashed:', e); }
 try { initTracing(); } catch(e) { console.error('initTracing() crashed:', e); }
+try { initDrawOverlay(); } catch(e) { console.error('initDrawOverlay() crashed:', e); }
 animate();
 
 // Obre els accordions "Propietats" i "Moure/Rotar" per defecte
