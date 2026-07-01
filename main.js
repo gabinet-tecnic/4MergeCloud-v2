@@ -1955,6 +1955,8 @@ function setupUI() {
         onWindowResize();
         fitCameraToObject(cloud);
         updateRaycasterThreshold();
+        const _dBar = document.getElementById('drawFloatBar');
+        if (_dBar) _dBar.style.display = 'flex';
       }
     } finally {
       _loading = false;
