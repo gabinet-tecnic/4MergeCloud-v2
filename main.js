@@ -4,6 +4,13 @@ import { OrbitControls } from './jsm/controls/OrbitControls.js';
 import { TransformControls } from './jsm/controls/TransformControls.js';
 import { loadPLY, loadXYZ } from './loaders/pointcloud_loaders.js';
 
+// ── Versió i feature flags ────────────────────────────────────────────────────
+const APP_VERSION = '2.1.0';
+const FEATURES = {
+  segmentacioSemantica: false,  // RANSAC + classificació per tipus
+  completatBuits:       false,  // omplir forats basant-se en semàntica
+};
+
 // ── Parsers OBJ i GLB ────────────────────────────────────────────────────────
 async function loadOBJ(file) {
   const text = await file.text();
@@ -235,7 +242,7 @@ function init() {
   camera = new THREE.PerspectiveCamera(60, width / height, 0.01, 1e7);
   camera.position.set(0, 0, 5);
 
-  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(width, height);
   renderer.localClippingEnabled = true;
@@ -2777,6 +2784,210 @@ function onMouseWheel(event) {
 }
 
 // ─────────────────────────────────────────────
+// Edició semàntica per visió IA
+// ─────────────────────────────────────────────
+
+function _captureSceneImage() {
+  // Renderitza la vista de planta i retorna base64 JPEG
+  const cam = (useOrtho && orthoCamera) ? orthoCamera : camera;
+  renderer.render(scene, cam);
+  return renderer.domElement.toDataURL('image/jpeg', 0.85).split(',')[1];
+}
+
+function _cloudWorldBBox() {
+  const box = new THREE.Box3();
+  const targets = clouds.length > 0 ? clouds : [];
+  targets.forEach(c => box.expandByObject(c));
+  return box.isEmpty() ? null : box;
+}
+
+// Detecta alçada del terra (5è percentil de Y excloent la bbox donada)
+function _detectFloorY(cloud, excludeBBoxes) {
+  const pos = cloud.geometry.getAttribute('position');
+  const ys = [];
+  for (let i = 0; i < pos.count; i++) {
+    const px = pos.getX(i), pz = pos.getZ(i);
+    let inBbox = false;
+    for (const b of excludeBBoxes) {
+      if (px >= b.wx1 && px <= b.wx2 && pz >= b.wz1 && pz <= b.wz2) { inBbox = true; break; }
+    }
+    if (!inBbox) ys.push(pos.getY(i));
+  }
+  if (ys.length === 0) return 0;
+  ys.sort((a, b) => a - b);
+  return ys[Math.floor(ys.length * 0.05)];
+}
+
+function _applySemanticOp(cloud, operacio, worldObjs, colorHex) {
+  const pos = cloud.geometry.getAttribute('position');
+  const col = cloud.geometry.getAttribute('color');
+  const n   = pos.count;
+
+  // Màscara de punts afectats
+  const affected = new Uint8Array(n);
+  let count = 0;
+  for (let i = 0; i < n; i++) {
+    const px = pos.getX(i), pz = pos.getZ(i);
+    for (const obj of worldObjs) {
+      if (px >= obj.wx1 && px <= obj.wx2 && pz >= obj.wz1 && pz <= obj.wz2) {
+        affected[i] = 1; count++; break;
+      }
+    }
+  }
+  if (count === 0) return 0;
+
+  if (operacio === 'seleccionar' || operacio === 'canviar_color') {
+    // Pinta en taronja (seleccionar) o en el color indicat
+    let r = 1.0, g = 0.5, b = 0.0;
+    if (operacio === 'canviar_color' && colorHex) {
+      r = parseInt(colorHex.slice(1,3),16)/255;
+      g = parseInt(colorHex.slice(3,5),16)/255;
+      b = parseInt(colorHex.slice(5,7),16)/255;
+    }
+    const arr = col ? col.array.slice() : new Float32Array(n * 3).fill(0.7);
+    for (let i = 0; i < n; i++) {
+      if (affected[i]) { arr[i*3]=r; arr[i*3+1]=g; arr[i*3+2]=b; }
+    }
+    cloud.geometry.setAttribute('color', new THREE.BufferAttribute(arr, 3));
+    cloud.material.vertexColors = true;
+    cloud.material.needsUpdate = true;
+
+  } else if (operacio === 'eliminar' || operacio === 'substituir_terra') {
+    const floorY = operacio === 'substituir_terra'
+      ? _detectFloorY(cloud, worldObjs) : 0;
+
+    // Punt d'espaiat per la substitució de terra (~densitat original)
+    const spacing = Math.sqrt(
+      (worldObjs.reduce((s,b)=>(s+(b.wx2-b.wx1)*(b.wz2-b.wz1)),0)) / Math.max(count,1)
+    ) * 0.3 || 0.05;
+
+    const nX=[], nY=[], nZ=[], nR=[], nG=[], nB=[];
+    const hasCol = !!col;
+
+    for (let i = 0; i < n; i++) {
+      if (!affected[i]) {
+        nX.push(pos.getX(i)); nY.push(pos.getY(i)); nZ.push(pos.getZ(i));
+        if (hasCol) { nR.push(col.getX(i)); nG.push(col.getY(i)); nB.push(col.getZ(i)); }
+        else { nR.push(0.7); nG.push(0.7); nB.push(0.7); }
+      }
+    }
+
+    if (operacio === 'substituir_terra') {
+      for (const b of worldObjs) {
+        for (let px = b.wx1; px <= b.wx2; px += spacing) {
+          for (let pz = b.wz1; pz <= b.wz2; pz += spacing) {
+            nX.push(px); nY.push(floorY); nZ.push(pz);
+            nR.push(0.55); nG.push(0.55); nB.push(0.55);
+          }
+        }
+      }
+    }
+
+    const newPos = new Float32Array(nX.length * 3);
+    const newCol = new Float32Array(nX.length * 3);
+    for (let i = 0; i < nX.length; i++) {
+      newPos[i*3]=nX[i]; newPos[i*3+1]=nY[i]; newPos[i*3+2]=nZ[i];
+      newCol[i*3]=nR[i]; newCol[i*3+1]=nG[i]; newCol[i*3+2]=nB[i];
+    }
+    cloud.geometry.setAttribute('position', new THREE.BufferAttribute(newPos, 3));
+    cloud.geometry.setAttribute('color',    new THREE.BufferAttribute(newCol, 3));
+    cloud.material.vertexColors = true;
+    cloud.material.needsUpdate  = true;
+    cloud.geometry.computeBoundingBox();
+    cloud.geometry.computeBoundingSphere();
+  }
+
+  return count;
+}
+
+async function _semanticVisionEdit(query, operacio, colorHex) {
+  const apiKey = localStorage.getItem('ai_api_key');
+  if (!apiKey) return 'Cal una clau API per a les ordres semàntiques.';
+  if (clouds.length === 0) return 'Primer carrega un núvol de punts.';
+
+  // Assegura vista de planta
+  if (!useOrtho) setOrthoView(new THREE.Vector3(0,1,0), new THREE.Vector3(0,0,-1));
+
+  _cmdLog('📷 Capturant vista de planta…', 'cmd-sys');
+  const img64 = _captureSceneImage();
+  const bbox  = _cloudWorldBBox();
+  if (!bbox) return 'No s\'ha pogut calcular els límits del núvol.';
+
+  const sysPrompt = `Ets un expert en interpretació visual de núvols de punts 3D (vista de planta).
+Analitza la imatge i localitza els objectes demanats.
+Retorna ÚNICAMENT un JSON vàlid, sense text addicional:
+{
+  "objectes": [
+    {"tipus": "nom_objecte", "bbox_norm": {"x1":0.0,"z1":0.0,"x2":1.0,"z2":1.0}}
+  ],
+  "resposta": "text breu explicatiu"
+}
+Les coordenades bbox_norm van de 0.0 (esquerra/dalt) a 1.0 (dreta/baix) en la imatge.
+Si no trobes els objectes, retorna objectes=[].`;
+
+  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'content-type': 'application/json',
+      'anthropic-dangerous-direct-browser-access': 'true'
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 1024,
+      system: sysPrompt,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: img64 } },
+          { type: 'text',  text: `Identifica i retorna la posició de: ${query}` }
+        ]
+      }]
+    })
+  });
+
+  if (!resp.ok) {
+    const err = await resp.json().catch(()=>({}));
+    return 'Error API Vision: ' + (err.error?.message || resp.statusText);
+  }
+
+  const data = await resp.json();
+  const raw  = data.content?.[0]?.text || '';
+  const jsonMatch = raw.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) return 'La IA no ha retornat un format vàlid.';
+
+  let parsed;
+  try { parsed = JSON.parse(jsonMatch[0]); }
+  catch { return 'Error parsejant la resposta de la IA.'; }
+
+  if (!parsed.objectes || parsed.objectes.length === 0)
+    return `No s'han trobat objectes del tipus "${query}" a la vista actual.`;
+
+  // Converteix coordenades normalitzades → coordenades món
+  const rangeX = bbox.max.x - bbox.min.x;
+  const rangeZ = bbox.max.z - bbox.min.z;
+  const worldObjs = parsed.objectes.map(o => ({
+    tipus: o.tipus,
+    wx1: bbox.min.x + o.bbox_norm.x1 * rangeX,
+    wx2: bbox.min.x + o.bbox_norm.x2 * rangeX,
+    wz1: bbox.min.z + o.bbox_norm.z1 * rangeZ,
+    wz2: bbox.min.z + o.bbox_norm.z2 * rangeZ,
+  }));
+
+  _cmdLog(`🔍 ${parsed.resposta || parsed.objectes.length + ' objecte(s) trobat(s)'}`, 'cmd-x');
+
+  const targetClouds = selectedCloud ? [selectedCloud] : clouds;
+  let total = 0;
+  for (const cloud of targetClouds) {
+    total += _applySemanticOp(cloud, operacio, worldObjs, colorHex);
+  }
+
+  const opLabel = { seleccionar:'seleccionats (taronja)', eliminar:'eliminats', substituir_terra:'substituïts pel terra', canviar_color:'repintats' };
+  return `✓ ${total.toLocaleString()} punts ${opLabel[operacio] || operacio} en ${parsed.objectes.length} zona(es).`;
+}
+
+// ─────────────────────────────────────────────
 // ─────────────────────────────────────────────
 // AI Assistant — Claude API integration
 // ─────────────────────────────────────────────
@@ -2878,6 +3089,19 @@ const AI_TOOLS = [
     name: 'get_app_state',
     description: 'Report the current state: clouds loaded, selected cloud, number of points. Use for: "quins núvols hi ha?/quants punts?/estat de l\'app/qué hay cargado?".',
     input_schema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'semantic_vision_edit',
+    description: 'Use Claude Vision to identify objects visually in the point cloud and edit them. Use for any command that refers to real-world objects by name: "selecciona els llits", "elimina el mobiliari", "substitueix les cadires pel terra", "identifica les taules", "marca les columnes de vermell", "elimina la vegetació". This tool captures the current view as an image and asks Vision AI to locate the objects.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query:   { type: 'string', description: 'What to find visually in the cloud (e.g. "llits", "cadires i taules", "vegetació")' },
+        operacio: { type: 'string', enum: ['seleccionar','eliminar','substituir_terra','canviar_color'], description: 'seleccionar=highlight orange, eliminar=delete points, substituir_terra=replace with floor level, canviar_color=paint a color' },
+        color:   { type: 'string', description: 'Hex color like #ff0000, only needed for canviar_color' }
+      },
+      required: ['query', 'operacio']
+    }
   }
 ];
 
@@ -2966,6 +3190,9 @@ async function _executeAITool(name, input) {
         : st.clouds.map(c => `• ${c.name} (${c.points.toLocaleString()} pts)${c.selected ? ' ← seleccionat' : ''}`).join('\n');
       return desc;
     }
+    case 'semantic_vision_edit': {
+      return await _semanticVisionEdit(input.query, input.operacio, input.color);
+    }
     default:
       return `Eina desconeguda: ${name}`;
   }
@@ -2984,9 +3211,10 @@ const _aiToolLabels = {
   start_erase_tool:    'Activant eina d\'esborrat',
   toggle_annotation:   'Mode de dibuix',
   undo_last_action:    'Desfent acció',
-  merge_and_download:  'Fusionant i descarregant',
-  export_section_dxf:  'Exportant secció DXF',
-  get_app_state:       'Consultant estat'
+  merge_and_download:   'Fusionant i descarregant',
+  export_section_dxf:   'Exportant secció DXF',
+  get_app_state:        'Consultant estat',
+  semantic_vision_edit: '🔍 Analitzant núvol per visió IA…'
 };
 
 function _aiAddMsg(text, cls) {
@@ -3106,38 +3334,71 @@ const TRACE_LAYERS = {
   PORTES:   { color: 0x00ccff, dxfColor: 4 },
   FINESTRES:{ color: 0xffee00, dxfColor: 2 },
 };
-let _tracing       = false;
-let _traceLayer    = 'PARETS';
-let _tracePts      = [];   // current polyline points (THREE.Vector3)
-let _traceSegments = [];   // {layer, points:[V3,...], lineObj}
-let _tracePreview  = null; // THREE.Line preview (mouse hover)
-let _traceCurrentLine = null; // THREE.Line being built
-let _traceClickTimer  = null; // debounce: distinguish click vs dblclick
+let _tracing          = false;
+let _traceMode        = 'polyline'; // 'polyline' | 'free'
+let _traceLayer       = 'PARETS';
+let _tracePts         = [];
+let _traceSegments    = [];
+let _tracePreview     = null;
+let _traceCurrentLine = null;
+let _traceFreeDown    = false; // free-draw: mouse held
 
-function _traceStatus(msg) {
+function _traceStatusUpdate() {
   const el = document.getElementById('traceStatus');
-  if (el) el.textContent = msg;
+  if (!el) return;
+  const segs = _traceSegments.length;
+  const pts  = _tracePts.length;
+  const closeBtn = document.getElementById('traceClose');
+  if (!_tracing) {
+    el.textContent = segs > 0 ? segs + ' segment(s) guardats. Prem Exportar DXF.' : '';
+    if (closeBtn) closeBtn.style.display = 'none';
+    return;
+  }
+  if (_traceMode === 'polyline') {
+    if (pts === 0)
+      el.textContent = 'Capa: ' + _traceLayer + ' — fes clic per afegir vèrtexs.';
+    else
+      el.textContent = pts + ' punt(s) en curs. Prem "Tancar Segment" per guardar.';
+    if (closeBtn) closeBtn.style.display = pts >= 2 ? 'block' : 'none';
+  } else {
+    el.textContent = 'Mode lliure — manté el botó del ratolí premut i arrossega.';
+    if (closeBtn) closeBtn.style.display = 'none';
+  }
+  if (segs > 0) el.textContent += '\n' + segs + ' segment(s) guardats.';
 }
 
 function setTraceLayer(layer) {
   _traceLayer = layer;
-  if (_tracing) _traceStatus('Capa: ' + layer + ' — fes clic per col·locar punts');
+  _traceStatusUpdate();
 }
 
-function _traceRaycast(event) {
+function setTraceMode(mode) {
+  _traceMode = mode;
+  document.getElementById('traceModePolyline')?.classList.toggle('trace-active', mode === 'polyline');
+  document.getElementById('traceModeFree')?.classList.toggle('trace-active',     mode === 'free');
+  // Commit open polyline when switching modes
+  if (_tracePts.length >= 2) _traceCommitSegment();
+  else { _tracePts = []; _updateCurrentLine(); }
+  _traceStatusUpdate();
+}
+
+function _traceRaycast(clientX, clientY) {
   const rect = renderer.domElement.getBoundingClientRect();
-  const nx = ((event.clientX - rect.left) / rect.width)  * 2 - 1;
-  const ny = -((event.clientY - rect.top)  / rect.height) * 2 + 1;
-  const mouse2 = new THREE.Vector2(nx, ny);
+  const nx = ((clientX - rect.left) / rect.width)  * 2 - 1;
+  const ny = -((clientY - rect.top)  / rect.height) * 2 + 1;
   const rc = new THREE.Raycaster();
   rc.params.Points = { threshold: 0.15 };
   const cam = (useOrtho && orthoCamera) ? orthoCamera : camera;
-  rc.setFromCamera(mouse2, cam);
+  rc.setFromCamera(new THREE.Vector2(nx, ny), cam);
   const hits = rc.intersectObjects(clouds, false);
   if (hits.length > 0) return hits[0].point.clone();
-
-  // fallback: project onto Y=0 plane
-  const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+  // fallback: project onto the median Y plane of loaded clouds
+  let planeY = 0;
+  if (clouds.length > 0) {
+    const box = new THREE.Box3().setFromObject(clouds[0]);
+    planeY = (box.min.y + box.max.y) / 2;
+  }
+  const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -planeY);
   const target = new THREE.Vector3();
   rc.ray.intersectPlane(plane, target);
   return target;
@@ -3159,11 +3420,13 @@ function _updateCurrentLine() {
   scene.add(_traceCurrentLine);
 }
 
-function _updatePreview(worldPt) {
+function _updatePreview(clientX, clientY) {
   if (_tracePreview) { scene.remove(_tracePreview); _tracePreview = null; }
-  if (_tracePts.length === 0 || !worldPt) return;
+  if (_tracePts.length === 0) return;
+  const worldPt = _traceRaycast(clientX, clientY);
+  if (!worldPt) return;
   const cfg = TRACE_LAYERS[_traceLayer];
-  const mat = new THREE.LineDashedMaterial({ color: cfg.color, dashSize: 0.1, gapSize: 0.05, depthTest: false });
+  const mat = new THREE.LineDashedMaterial({ color: cfg.color, dashSize: 0.05, gapSize: 0.03, depthTest: false });
   const geo = new THREE.BufferGeometry().setFromPoints([_tracePts[_tracePts.length - 1], worldPt]);
   _tracePreview = new THREE.Line(geo, mat);
   _tracePreview.computeLineDistances();
@@ -3173,17 +3436,15 @@ function _updatePreview(worldPt) {
 
 function toggleTracing() {
   _tracing = !_tracing;
-  const btn = document.getElementById('traceToggle');
+  const btn    = document.getElementById('traceToggle');
   const viewer = document.getElementById('viewer');
   if (_tracing) {
-    btn.textContent = '⏹ Finalitzar Traçat';
+    btn.textContent = '⏹ Aturar Traçat';
     btn.classList.add('tracing');
     viewer.classList.add('trace-mode');
     controls.enabled = false;
     if (orthoControls) orthoControls.enabled = false;
-    _traceStatus('Capa: ' + _traceLayer + ' — fes clic per col·locar punts. Doble-clic per acabar segment.');
-    // Switch to top view for plan tracing
-    if (!useOrtho) setOrthoView(new THREE.Vector3(0,1,0), new THREE.Vector3(0,0,-1));
+    if (!useOrtho) setOrthoView(new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, -1));
   } else {
     btn.textContent = '✏ Iniciar Traçat 2D';
     btn.classList.remove('tracing');
@@ -3191,131 +3452,413 @@ function toggleTracing() {
     controls.enabled = true;
     if (orthoControls) orthoControls.enabled = true;
     if (_tracePreview) { scene.remove(_tracePreview); _tracePreview = null; }
-    // Finish any open polyline
     if (_tracePts.length >= 2) _traceCommitSegment();
-    else _tracePts = [];
-    _updateCurrentLine();
-    _traceStatus(_traceSegments.length + ' segments traçats');
+    else { _tracePts = []; _updateCurrentLine(); }
   }
+  _traceStatusUpdate();
 }
 
 function _traceCommitSegment() {
-  if (_tracePts.length < 2) { _tracePts = []; return; }
-  if (_traceCurrentLine) scene.remove(_traceCurrentLine);
+  if (_tracePts.length < 2) { _tracePts = []; _updateCurrentLine(); return; }
+  if (_traceCurrentLine) { scene.remove(_traceCurrentLine); _traceCurrentLine = null; }
   const cfg = TRACE_LAYERS[_traceLayer];
   const lineObj = _buildLineFromPoints([..._tracePts], cfg.color);
   if (lineObj) { lineObj.renderOrder = 999; scene.add(lineObj); }
   _traceSegments.push({ layer: _traceLayer, points: [..._tracePts], lineObj });
   _tracePts = [];
   _traceCurrentLine = null;
+  _traceStatusUpdate();
 }
 
-function _traceHandleClick(event) {
-  if (!_tracing) return;
+// ── Polyline mode handlers ────────────────────────────────────────────────────
+function _tracePolyClick(event) {
+  if (!_tracing || _traceMode !== 'polyline') return;
   event.stopPropagation();
-  // Debounce: ignore if this click is the first of a double-click (dblclick cancels the timer)
-  if (_traceClickTimer !== null) return;
-  const savedEvent = { clientX: event.clientX, clientY: event.clientY };
-  _traceClickTimer = setTimeout(() => {
-    _traceClickTimer = null;
-    const pt = _traceRaycast(savedEvent);
-    if (!pt) return;
-    _tracePts.push(pt);
-    _updateCurrentLine();
-    _traceStatus('Capa: ' + _traceLayer + ' — ' + _tracePts.length + ' punt(s). Doble-clic per acabar segment.');
-  }, 220);
-}
-
-function _traceHandleDblClick(event) {
-  if (!_tracing) return;
-  event.stopPropagation();
-  // Cancel the pending click timer so no extra point is added
-  if (_traceClickTimer !== null) { clearTimeout(_traceClickTimer); _traceClickTimer = null; }
-  _traceCommitSegment();
+  const pt = _traceRaycast(event.clientX, event.clientY);
+  if (!pt) return;
+  _tracePts.push(pt);
   _updateCurrentLine();
-  _traceStatus('Segment guardat. Fes clic per iniciar-ne un de nou.');
+  _traceStatusUpdate();
 }
 
-function _traceHandleMouseMove(event) {
-  if (!_tracing || _tracePts.length === 0) return;
-  const pt = _traceRaycast(event);
-  _updatePreview(pt);
+function _tracePolyMove(event) {
+  if (!_tracing || _traceMode !== 'polyline' || _tracePts.length === 0) return;
+  _updatePreview(event.clientX, event.clientY);
 }
 
+// ── Free-draw mode handlers ───────────────────────────────────────────────────
+let _traceFreeLastPt = null;
+const FREE_MIN_DIST = 0.05; // metres between sampled points
+
+function _traceFreeDn(event) {
+  if (!_tracing || _traceMode !== 'free') return;
+  event.preventDefault();
+  event.stopImmediatePropagation(); // prevent Three.js onPointerDown on same element
+  _traceFreeDown = true;
+  _traceFreeLastPt = null;
+  _tracePts = [];
+  const pt = _traceRaycast(event.clientX, event.clientY);
+  if (pt) { _tracePts.push(pt); _traceFreeLastPt = pt; }
+}
+
+function _traceFreeMv(event) {
+  if (!_tracing || _traceMode !== 'free' || !_traceFreeDown) return;
+  event.preventDefault(); // prevent page scroll during draw on touch
+  const pt = _traceRaycast(event.clientX, event.clientY);
+  if (!pt) return;
+  if (!_traceFreeLastPt || pt.distanceTo(_traceFreeLastPt) > FREE_MIN_DIST) {
+    _tracePts.push(pt);
+    _traceFreeLastPt = pt;
+    _updateCurrentLine();
+  }
+}
+
+function _traceFreeUp(event) {
+  if (!_tracing || _traceMode !== 'free' || !_traceFreeDown) return;
+  _traceFreeDown = false;
+  _traceFreeLastPt = null;
+  if (_tracePts.length >= 2) _traceCommitSegment();
+  else { _tracePts = []; _updateCurrentLine(); }
+}
+
+// ── Undo / clear ─────────────────────────────────────────────────────────────
 function traceUndoPoint() {
   if (_tracePts.length > 0) {
     _tracePts.pop();
     _updateCurrentLine();
     if (_tracePreview) { scene.remove(_tracePreview); _tracePreview = null; }
-    _traceStatus(_tracePts.length + ' punt(s) en el segment actual');
-    return;
-  }
-  if (_traceSegments.length > 0) {
+  } else if (_traceSegments.length > 0) {
     const last = _traceSegments.pop();
     if (last.lineObj) scene.remove(last.lineObj);
-    _traceStatus(_traceSegments.length + ' segments traçats');
   }
+  _traceStatusUpdate();
 }
 
 function traceClearAll() {
+  if (_traceSegments.length === 0 && _tracePts.length === 0) return;
   if (!confirm('Esborrar tots els segments traçats?')) return;
   _traceSegments.forEach(s => { if (s.lineObj) scene.remove(s.lineObj); });
   _traceSegments = [];
   _tracePts = [];
   if (_traceCurrentLine) { scene.remove(_traceCurrentLine); _traceCurrentLine = null; }
   if (_tracePreview) { scene.remove(_tracePreview); _tracePreview = null; }
-  _traceStatus('Traçat esborrat');
+  _traceStatusUpdate();
 }
 
+// ── Ajust geomètric: línia i arc (per a exportació neta) ─────────────────────
+
+// PCA per trobar la millor línia recta (retorna endpoints nets i error RMS)
+function _fitLine2D(pts) {
+  const n = pts.length;
+  let mx = 0, mz = 0;
+  for (const p of pts) { mx += p.x; mz += p.z; }
+  mx /= n; mz /= n;
+
+  let sxx = 0, sxz = 0, szz = 0;
+  for (const p of pts) {
+    const dx = p.x - mx, dz = p.z - mz;
+    sxx += dx * dx; sxz += dx * dz; szz += dz * dz;
+  }
+  const angle = 0.5 * Math.atan2(2 * sxz, sxx - szz);
+  const dirX = Math.cos(angle), dirZ = Math.sin(angle);
+
+  let tmin = Infinity, tmax = -Infinity, rms = 0;
+  for (const p of pts) {
+    const t    =  (p.x - mx) * dirX + (p.z - mz) * dirZ;
+    const perp = -(p.x - mx) * dirZ + (p.z - mz) * dirX;
+    rms += perp * perp;
+    if (t < tmin) tmin = t;
+    if (t > tmax) tmax = t;
+  }
+  return {
+    x1: mx + dirX * tmin, z1: mz + dirZ * tmin,
+    x2: mx + dirX * tmax, z2: mz + dirZ * tmax,
+    rms: Math.sqrt(rms / n),
+    len: tmax - tmin,
+  };
+}
+
+// Ajust de cercle (mètode Taubin). Retorna {cx,cz,r,a1,a2,rms} o null
+function _fitArc2D(pts) {
+  const n = pts.length;
+  if (n < 4) return null;
+
+  let mx = 0, mz = 0;
+  for (const p of pts) { mx += p.x; mz += p.z; }
+  mx /= n; mz /= n;
+
+  let Mxx=0, Mzz=0, Mxz=0, Mxxx=0, Mzzz=0, Mxxz=0, Mxzz=0;
+  for (const p of pts) {
+    const x = p.x - mx, z = p.z - mz;
+    Mxx += x*x; Mzz += z*z; Mxz += x*z;
+    Mxxx += x*x*x; Mzzz += z*z*z; Mxxz += x*x*z; Mxzz += x*z*z;
+  }
+  Mxx/=n; Mzz/=n; Mxz/=n; Mxxx/=n; Mzzz/=n; Mxxz/=n; Mxzz/=n;
+
+  const det = Mxx * Mzz - Mxz * Mxz;
+  if (Math.abs(det) < 1e-12) return null;
+
+  const bx = -(Mxxx + Mxzz) / 2;
+  const bz = -(Mxxz + Mzzz) / 2;
+  const cx0 = ( bx * Mzz - bz * Mxz) / det;
+  const cz0 = (-bx * Mxz + bz * Mxx) / det;
+  const cx = cx0 + mx, cz = cz0 + mz;
+
+  let r = 0;
+  for (const p of pts) r += Math.hypot(p.x - cx, p.z - cz);
+  r /= n;
+
+  // Radi massa gran = pràcticament una línia recta
+  const lineFit = _fitLine2D(pts);
+  if (r > lineFit.len * 20) return null;
+
+  let rms = 0;
+  for (const p of pts) { const d = Math.hypot(p.x - cx, p.z - cz) - r; rms += d*d; }
+  rms = Math.sqrt(rms / n);
+
+  // Angles inici i fi (en graus, sentit antihorari)
+  const a1 = (Math.atan2(pts[0].z - cz, pts[0].x - cx) * 180 / Math.PI + 360) % 360;
+  const a2 = (Math.atan2(pts[n-1].z - cz, pts[n-1].x - cx) * 180 / Math.PI + 360) % 360;
+
+  return { cx, cz, r, a1, a2, rms };
+}
+
+// Decideix si un segment s'ha d'exportar com a LINE o ARC
+function _fitSegment(pts) {
+  if (pts.length < 2) return null;
+  if (pts.length === 2) return { type: 'line', ...pts[0], ...{ x1:pts[0].x,z1:pts[0].z,x2:pts[1].x,z2:pts[1].z } };
+
+  const line = _fitLine2D(pts);
+  const arc  = _fitArc2D(pts);
+
+  // Usa arc si l'error és < 40% de l'error de línia i és un arc visible
+  if (arc && arc.rms < line.rms * 0.4 && arc.rms < line.len * 0.05) {
+    return { type: 'arc', ...arc };
+  }
+  return { type: 'line', ...line };
+}
+
+// ── DXF export ────────────────────────────────────────────────────────────────
 function traceExportDXF() {
-  const allSegs = [..._traceSegments];
-  // Include open segment if it has points
-  if (_tracePts.length >= 2) allSegs.push({ layer: _traceLayer, points: _tracePts });
-  if (allSegs.length === 0) { alert('No hi ha cap segment traçat per exportar.'); return; }
+  if (_tracePts.length >= 2) _traceCommitSegment();
 
-  const layers = [...new Set(allSegs.map(s => s.layer))];
-  const dxfColorMap = { PARETS: 7, PORTES: 4, FINESTRES: 2 };
+  if (_traceSegments.length === 0) {
+    alert('No hi ha cap segment traçat per exportar.\nDibuixa alguna línia primer.');
+    return;
+  }
 
-  let dxf = '0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1014\n9\n$INSUNITS\n70\n6\n0\nENDSEC\n';
+  const allSegs  = _traceSegments;
+  const layers   = [...new Set(allSegs.map(s => s.layer))];
+  const colorMap = { PARETS: 7, PORTES: 4, FINESTRES: 2 };
+  const R = '\r\n';
 
-  // TABLES section with layers
-  dxf += '0\nSECTION\n2\nTABLES\n0\nTABLE\n2\nLAYER\n70\n' + layers.length + '\n';
+  let dxf = '';
+  dxf += '0'+R+'SECTION'+R+'2'+R+'HEADER'+R;
+  dxf += '9'+R+'$ACADVER'+R+'1'+R+'AC1009'+R;
+  dxf += '0'+R+'ENDSEC'+R;
+
+  dxf += '0'+R+'SECTION'+R+'2'+R+'TABLES'+R;
+  dxf += '0'+R+'TABLE'+R+'2'+R+'LAYER'+R+'70'+R+layers.length+R;
   layers.forEach(lyr => {
-    dxf += '0\nLAYER\n2\n' + lyr + '\n70\n0\n62\n' + (dxfColorMap[lyr] || 7) + '\n6\nCONTINUOUS\n';
+    dxf += '0'+R+'LAYER'+R+'2'+R+lyr+R+'70'+R+'0'+R+'62'+R+(colorMap[lyr]||7)+R+'6'+R+'CONTINUOUS'+R;
   });
-  dxf += '0\nENDTAB\n0\nENDSEC\n';
+  dxf += '0'+R+'ENDTAB'+R+'0'+R+'ENDSEC'+R;
 
-  // ENTITIES section
-  dxf += '0\nSECTION\n2\nENTITIES\n';
+  dxf += '0'+R+'SECTION'+R+'2'+R+'ENTITIES'+R;
+
+  let nLines = 0, nArcs = 0;
   allSegs.forEach(seg => {
-    const pts = seg.points;
-    for (let i = 0; i < pts.length - 1; i++) {
-      const a = pts[i], b = pts[i + 1];
-      dxf += '0\nLINE\n8\n' + seg.layer + '\n';
-      dxf += '10\n' + a.x.toFixed(4) + '\n20\n' + a.z.toFixed(4) + '\n30\n0.0\n';
-      dxf += '11\n' + b.x.toFixed(4) + '\n21\n' + b.z.toFixed(4) + '\n31\n0.0\n';
+    const fit = _fitSegment(seg.points);
+    if (!fit) return;
+
+    if (fit.type === 'line') {
+      dxf += '0'+R+'LINE'+R+'8'+R+seg.layer+R;
+      dxf += '10'+R+fit.x1.toFixed(4)+R+'20'+R+fit.z1.toFixed(4)+R+'30'+R+'0.0'+R;
+      dxf += '11'+R+fit.x2.toFixed(4)+R+'21'+R+fit.z2.toFixed(4)+R+'31'+R+'0.0'+R;
+      nLines++;
+    } else {
+      // ARC: center, radius, start/end angle
+      dxf += '0'+R+'ARC'+R+'8'+R+seg.layer+R;
+      dxf += '10'+R+fit.cx.toFixed(4)+R+'20'+R+fit.cz.toFixed(4)+R+'30'+R+'0.0'+R;
+      dxf += '40'+R+fit.r.toFixed(4)+R;
+      dxf += '50'+R+fit.a1.toFixed(4)+R;
+      dxf += '51'+R+fit.a2.toFixed(4)+R;
+      nArcs++;
     }
   });
-  dxf += '0\nENDSEC\n0\nEOF\n';
 
-  const filename = 'tracat_2d_' + new Date().toISOString().slice(0,10) + '.dxf';
+  dxf += '0'+R+'ENDSEC'+R+'0'+R+'EOF'+R;
+
+  const filename = 'tracat_' + new Date().toISOString().slice(0, 10) + '.dxf';
   const blob = new Blob([dxf], { type: 'application/dxf' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
   a.href = url; a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
   URL.revokeObjectURL(url);
-  _traceStatus('✓ Descarregat: ' + filename + ' (' + allSegs.length + ' segments) → carpeta Descàrregues');
+
+  document.getElementById('traceStatus').textContent =
+    '✓ ' + filename + ' — ' + nLines + ' línies' + (nArcs > 0 ? ', ' + nArcs + ' arcs' : '') + ' (geometria ajustada)';
 }
 
 function initTracing() {
   const canvas = renderer?.domElement;
   if (!canvas) return;
-  canvas.addEventListener('click',     _traceHandleClick,     { capture: true });
-  canvas.addEventListener('dblclick',  _traceHandleDblClick,  { capture: true });
-  canvas.addEventListener('mousemove', _traceHandleMouseMove, { passive: true });
+
+  // Polyline mode
+  canvas.addEventListener('click',     _tracePolyClick, { capture: true });
+  canvas.addEventListener('mousemove', _tracePolyMove,  { passive: true });
+
+  // Free-draw mode — pointer events work for mouse, touch and stylus
+  canvas.addEventListener('pointerdown',   _traceFreeDn, { capture: true });
+  canvas.addEventListener('pointermove',   _traceFreeMv, { capture: true });
+  canvas.addEventListener('pointerup',     _traceFreeUp, { capture: true });
+  canvas.addEventListener('pointercancel', _traceFreeUp, { capture: true });
+
+  // Buttons
+  const closeBtn = document.getElementById('traceClose');
+  if (closeBtn) closeBtn.addEventListener('click', () => { _traceCommitSegment(); _traceStatusUpdate(); });
+
+  const mPolyBtn = document.getElementById('traceModePolyline');
+  const mFreeBtn = document.getElementById('traceModeFree');
+  if (mPolyBtn) mPolyBtn.addEventListener('click', () => setTraceMode('polyline'));
+  if (mFreeBtn) mFreeBtn.addEventListener('click', () => setTraceMode('free'));
+}
+
+// ─────────────────────────────────────────────
+// Draw Overlay — 2D freehand canvas → DXF
+// ─────────────────────────────────────────────
+let _dCtx         = null;
+let _dActive      = false;
+let _dStroke      = []; // [{clientX, clientY}] current stroke screen coords
+let _dLayer       = 0;
+
+const _D_LAYER_COLORS = ['#ff4444', '#4488ff', '#44cc66', '#ffcc00'];
+
+function initDrawOverlay() {
+  const overlay = document.getElementById('drawOverlay');
+  if (!overlay) return;
+  const viewer  = document.getElementById('viewer');
+
+  function _syncSize() {
+    const dpr = window.devicePixelRatio || 1;
+    const w = viewer.clientWidth;
+    const h = viewer.clientHeight;
+    overlay.width  = w * dpr;
+    overlay.height = h * dpr;
+    overlay.style.width  = w + 'px';
+    overlay.style.height = h + 'px';
+    _dCtx = overlay.getContext('2d');
+    _dCtx.scale(dpr, dpr);
+  }
+  requestAnimationFrame(_syncSize); // defer until layout is ready
+  window.addEventListener('resize', _syncSize);
+
+  overlay.addEventListener('pointerdown',   _dDn, { capture: true });
+  overlay.addEventListener('pointermove',   _dMv, { capture: true });
+  overlay.addEventListener('pointerup',     _dUp, { capture: true });
+  overlay.addEventListener('pointercancel', _dUp, { capture: true });
+
+  document.getElementById('drawFloatBtn')?.addEventListener('click', toggleDrawOverlay);
+  document.getElementById('drawCloseBtn')?.addEventListener('click', toggleDrawOverlay);
+  document.getElementById('drawLayerSel')?.addEventListener('change', e => {
+    _dLayer = parseInt(e.target.value);
+    _traceLayer = _dLayer;
+  });
+  document.getElementById('drawUndoBtn')?.addEventListener('click', _dUndo);
+  document.getElementById('drawExportBtn')?.addEventListener('click', traceExportDXF);
+}
+
+function toggleDrawOverlay() {
+  _dActive = !_dActive;
+  const overlay = document.getElementById('drawOverlay');
+  const tools   = document.getElementById('drawFloatTools');
+  const btn     = document.getElementById('drawFloatBtn');
+
+  if (_dActive) {
+    overlay.style.pointerEvents = 'auto';
+    tools.style.display = 'flex';
+    btn.textContent = '⏹ Aturar';
+    btn.classList.add('active');
+    // Enter top-down ortho + disable orbit
+    _tracing = true;
+    controls.enabled = false;
+    if (orthoControls) orthoControls.enabled = false;
+    if (!useOrtho) setOrthoView(new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, -1));
+    _dUpdateCount();
+  } else {
+    overlay.style.pointerEvents = 'none';
+    if (_dCtx) _dCtx.clearRect(0, 0, overlay.width / (window.devicePixelRatio||1), overlay.height / (window.devicePixelRatio||1));
+    tools.style.display = 'none';
+    btn.textContent = '✏ Dibuix';
+    btn.classList.remove('active');
+    // Commit any pending, re-enable orbit
+    if (_tracePts.length >= 2) _traceCommitSegment();
+    else { _tracePts = []; _updateCurrentLine(); }
+    _tracing = false;
+    controls.enabled = true;
+    if (orthoControls) orthoControls.enabled = true;
+  }
+}
+
+function _dDn(event) {
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  _dStroke = [{ clientX: event.clientX, clientY: event.clientY }];
+  const color = _D_LAYER_COLORS[_dLayer] || '#ff4444';
+  const overlay = document.getElementById('drawOverlay');
+  const r = overlay.getBoundingClientRect();
+  _dCtx.clearRect(0, 0, overlay.width, overlay.height); // clear previous ghost stroke
+  _dCtx.beginPath();
+  _dCtx.moveTo(event.clientX - r.left, event.clientY - r.top);
+  _dCtx.strokeStyle = color;
+  _dCtx.lineWidth = 2.5;
+  _dCtx.lineCap = 'round';
+  _dCtx.lineJoin = 'round';
+  _dCtx.globalAlpha = 0.85;
+}
+
+function _dMv(event) {
+  if (!_dStroke.length) return;
+  event.preventDefault();
+  _dStroke.push({ clientX: event.clientX, clientY: event.clientY });
+  const r = document.getElementById('drawOverlay').getBoundingClientRect();
+  _dCtx.lineTo(event.clientX - r.left, event.clientY - r.top);
+  _dCtx.stroke();
+}
+
+function _dUp(event) {
+  if (!_dStroke.length) return;
+  event.preventDefault();
+  // Project every screen point to 3D world
+  _tracePts = _dStroke.map(p => _traceRaycast(p.clientX, p.clientY)).filter(Boolean);
+  _dStroke = [];
+  // Clear ghost stroke (3D committed line takes over visually)
+  const overlay = document.getElementById('drawOverlay');
+  const dpr = window.devicePixelRatio || 1;
+  _dCtx.clearRect(0, 0, overlay.width / dpr, overlay.height / dpr);
+  if (_tracePts.length >= 2) {
+    _traceLayer = _dLayer;
+    _traceCommitSegment();
+    _dUpdateCount();
+  } else {
+    _tracePts = [];
+  }
+}
+
+function _dUndo() {
+  if (!_traceSegments.length) return;
+  const seg = _traceSegments.pop();
+  if (seg.lineObj) scene.remove(seg.lineObj);
+  _traceStatusUpdate();
+  _dUpdateCount();
+}
+
+function _dUpdateCount() {
+  const el = document.getElementById('drawSegCount');
+  if (!el) return;
+  const n = _traceSegments.length;
+  el.textContent = n === 0 ? '' : n + ' traç' + (n > 1 ? 'os dibuixats' : ' dibuixat');
 }
 
 // ─────────────────────────────────────────────
@@ -3653,11 +4196,16 @@ window.addEventListener('error', e => {
   if (cl) cl.classList.remove('collapsed');
 });
 
+// Mostra versió a la capçalera
+const _vEl = document.getElementById('appVersion');
+if (_vEl) _vEl.textContent = 'v' + APP_VERSION;
+
 try { init(); } catch(e) { console.error('init() crashed:', e); }
 try { setupUI(); } catch(e) { console.error('setupUI() crashed:', e); }
 try { initAccordions(); } catch(e) { console.error('initAccordions() crashed:', e); }
 try { initCmdLine(); } catch(e) { console.error('initCmdLine() crashed:', e); }
 try { initTracing(); } catch(e) { console.error('initTracing() crashed:', e); }
+try { initDrawOverlay(); } catch(e) { console.error('initDrawOverlay() crashed:', e); }
 animate();
 
 // Obre els accordions "Propietats" i "Moure/Rotar" per defecte
