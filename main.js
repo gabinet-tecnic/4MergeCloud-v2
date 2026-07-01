@@ -3332,10 +3332,17 @@ let _aiVoiceRec = null;
 // Traçat 2D → DXF
 // ─────────────────────────────────────────────
 const TRACE_LAYERS = {
-  PARETS:   { color: 0xffffff, dxfColor: 7 },
-  PORTES:   { color: 0x00ccff, dxfColor: 4 },
-  FINESTRES:{ color: 0xffee00, dxfColor: 2 },
+  PARETS:    { color: 0xff4444, dxfColor: 1 },
+  OBERTURES: { color: 0x4488ff, dxfColor: 5 },
+  MOBILIARI: { color: 0x44cc66, dxfColor: 3 },
+  ANOTACIO:  { color: 0xffcc00, dxfColor: 2 },
+  // llegat (UI d'accordion antiga)
+  PORTES:    { color: 0x00ccff, dxfColor: 4 },
+  FINESTRES: { color: 0xffee00, dxfColor: 2 },
 };
+
+// Mapeig índex del selector de dibuix (0-3) → clau de capa
+const _D_LAYER_KEYS = ['PARETS', 'OBERTURES', 'MOBILIARI', 'ANOTACIO'];
 let _tracing          = false;
 let _traceMode        = 'polyline'; // 'polyline' | 'free'
 let _traceLayer       = 'PARETS';
@@ -3651,7 +3658,7 @@ function traceExportDXF() {
 
   const allSegs  = _traceSegments;
   const layers   = [...new Set(allSegs.map(s => s.layer))];
-  const colorMap = { PARETS: 7, PORTES: 4, FINESTRES: 2 };
+  const colorMap = { PARETS: 1, OBERTURES: 5, MOBILIARI: 3, ANOTACIO: 2, PORTES: 4, FINESTRES: 2 };
   const R = '\r\n';
 
   let dxf = '';
@@ -3765,7 +3772,7 @@ function initDrawOverlay() {
   document.getElementById('drawCloseBtn')?.addEventListener('click', toggleDrawOverlay);
   document.getElementById('drawLayerSel')?.addEventListener('change', e => {
     _dLayer = parseInt(e.target.value);
-    _traceLayer = _dLayer;
+    _traceLayer = _D_LAYER_KEYS[_dLayer] || 'PARETS';
   });
   document.getElementById('drawUndoBtn')?.addEventListener('click', _dUndo);
   document.getElementById('drawExportBtn')?.addEventListener('click', traceExportDXF);
@@ -3840,7 +3847,7 @@ function _dUp(event) {
   const dpr = window.devicePixelRatio || 1;
   _dCtx.clearRect(0, 0, overlay.width / dpr, overlay.height / dpr);
   if (_tracePts.length >= 2) {
-    _traceLayer = _dLayer;
+    _traceLayer = _D_LAYER_KEYS[_dLayer] || 'PARETS';
     _traceCommitSegment();
     _dUpdateCount();
   } else {
