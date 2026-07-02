@@ -5,10 +5,11 @@ import { TransformControls } from './jsm/controls/TransformControls.js';
 import { loadPLY, loadXYZ } from './loaders/pointcloud_loaders.js';
 
 // ── Versió i feature flags ────────────────────────────────────────────────────
-const APP_VERSION = '2.1.0';
+const APP_VERSION = '2.3.0';
 const FEATURES = {
   segmentacioSemantica: false,  // RANSAC + classificació per tipus
   completatBuits:       false,  // omplir forats basant-se en semàntica
+  editorPlanta:         true,   // editor 2D estructurat (nodes + parets) → editor2d.js
 };
 
 // ── Parsers OBJ i GLB ────────────────────────────────────────────────────────
@@ -1957,6 +1958,8 @@ function setupUI() {
         updateRaycasterThreshold();
         const _dBar = document.getElementById('drawFloatBar');
         if (_dBar) _dBar.style.display = 'flex';
+        const _eBar = document.getElementById('editorBar');
+        if (_eBar && FEATURES.editorPlanta) _eBar.style.display = 'flex';
       }
     } finally {
       _loading = false;
@@ -3785,6 +3788,7 @@ function toggleDrawOverlay() {
   const btn     = document.getElementById('drawFloatBtn');
 
   if (_dActive) {
+    if (_ed2dActive) toggleEditor2D();   // no conviuen: tanca l'editor de planta
     overlay.style.pointerEvents = 'auto';
     tools.style.display = 'flex';
     btn.textContent = '⏹ Aturar';
@@ -3868,6 +3872,89 @@ function _dUpdateCount() {
   if (!el) return;
   const n = _traceSegments.length;
   el.textContent = n === 0 ? '' : n + ' traç' + (n > 1 ? 'os dibuixats' : ' dibuixat');
+}
+
+// ─────────────────────────────────────────────
+// Editor de planta 2D estructurat (mòdul aïllat editor2d.js)
+// ─────────────────────────────────────────────
+let _ed2d       = null;
+let _ed2dActive = false;
+let _ed2dWired  = false;
+
+async function _ensureEditor2D() {
+  if (_ed2d) return _ed2d;
+  const mod = await import('./editor2d.js?v=' + APP_VERSION);
+  _ed2d = mod.createEditor2D({
+    THREE, scene, renderer,
+    screenToWorld:      (x, y) => _traceRaycast(x, y),
+    getActiveCamera:    () => (useOrtho && orthoCamera) ? orthoCamera : camera,
+    setTopView:         () => { if (!useOrtho) setOrthoView(new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, -1)); },
+    setControlsEnabled: (b) => {
+      controls.enabled = b;
+      if (orthoControls) orthoControls.enabled = b;
+      if (transformControls) { transformControls.enabled = b; transformControls.visible = b; }
+    },
+    getClouds:          () => clouds,
+  });
+  return _ed2d;
+}
+
+function _edSetModeBtn(m) {
+  document.getElementById('edModeDraw')?.classList.toggle('active', m === 'draw');
+  document.getElementById('edModeEdit')?.classList.toggle('active', m === 'edit');
+}
+
+function _wireEditorButtons(ed) {
+  if (_ed2dWired) return;
+  _ed2dWired = true;
+  const upd = () => {
+    const c = ed.count();
+    const el = document.getElementById('edCount');
+    if (el) el.textContent = c.walls + ' parets, ' + c.nodes + ' nodes';
+  };
+  ed.onChange = upd;
+  document.getElementById('edModeDraw').onclick  = () => { ed.setMode('draw'); _edSetModeBtn('draw'); };
+  document.getElementById('edModeEdit').onclick  = () => { ed.setMode('edit'); _edSetModeBtn('edit'); };
+  document.getElementById('edNewChain').onclick  = () => ed.newChain();
+  document.getElementById('edHideCloud').onclick = () => {
+    const s = ed.cycleCloud();
+    document.getElementById('edHideCloud').textContent = '👁 Núvol: ' + s;
+  };
+  document.getElementById('edUndo').onclick   = () => { ed.undo(); upd(); };
+  document.getElementById('edClear').onclick  = () => { if (confirm('Esborrar tota la planta?')) { ed.clear(); upd(); } };
+  document.getElementById('edExport').onclick = () => ed.exportDXF();
+  document.getElementById('edClose').onclick  = () => toggleEditor2D();
+}
+
+async function toggleEditor2D() {
+  let ed;
+  try { ed = await _ensureEditor2D(); }
+  catch (e) { console.error('editor2d load failed:', e); alert('No s\'ha pogut carregar l\'editor de planta: ' + e.message); return; }
+  _wireEditorButtons(ed);
+
+  _ed2dActive = !_ed2dActive;
+  const tools = document.getElementById('editorTools');
+  const btn   = document.getElementById('editorLaunchBtn');
+
+  if (_ed2dActive) {
+    if (_dActive) toggleDrawOverlay();   // no conviuen: tanca el dibuix lliure
+    ed.setActive(true);
+    tools.style.display = 'flex';
+    btn.textContent = '⏹ Aturar editor';
+    btn.classList.add('active');
+    _edSetModeBtn('draw');
+    if (ed.onChange) ed.onChange();
+  } else {
+    ed.setActive(false);
+    tools.style.display = 'none';
+    btn.textContent = '📐 Editor planta';
+    btn.classList.remove('active');
+  }
+}
+
+function initEditor2DUI() {
+  const launch = document.getElementById('editorLaunchBtn');
+  if (launch) launch.addEventListener('click', toggleEditor2D);
 }
 
 // ─────────────────────────────────────────────
@@ -4215,6 +4302,7 @@ try { initAccordions(); } catch(e) { console.error('initAccordions() crashed:', 
 try { initCmdLine(); } catch(e) { console.error('initCmdLine() crashed:', e); }
 try { initTracing(); } catch(e) { console.error('initTracing() crashed:', e); }
 try { initDrawOverlay(); } catch(e) { console.error('initDrawOverlay() crashed:', e); }
+try { initEditor2DUI(); } catch(e) { console.error('initEditor2DUI() crashed:', e); }
 animate();
 
 // Obre els accordions "Propietats" i "Moure/Rotar" per defecte
