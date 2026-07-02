@@ -379,6 +379,21 @@
     #edExport { background: #1a4070 !important; color: #adf !important; font-weight: 700; }
     #edExport:hover { background: #1e5090 !important; }
     #edCount { color: #a99; font-size: 11px; text-align: center; }
+    #edThickPanel {
+      display: none; flex-direction: column; gap: 6px;
+      padding: 8px; background: #12161e;
+      border: 1px solid #2a3a4a; border-radius: 8px;
+    }
+    #edThickInfo { color: #b9a; font-size: 11px; line-height: 1.3; }
+    .ed-thick-row { display: flex; gap: 6px; }
+    .ed-thick-row input {
+      flex: 1; min-width: 0; padding: 6px 8px;
+      border-radius: 6px; border: 1px solid #2a3a4a;
+      background: #0e1218; color: #cde; font-size: 13px;
+    }
+    .ed-thick-row button { width: auto !important; padding: 6px 12px !important; }
+    #edThickMeasure { background: #14402f !important; color: #9fe1cb !important; }
+    #edThickMeasure:hover { background: #1a5540 !important; }
 
     /* Badges */
     .badge {
@@ -838,6 +853,15 @@
         <div class="ed-modes">
           <button id="edModeDraw" class="ed-mode active">✏ Parets</button>
           <button id="edModeEdit" class="ed-mode">✥ Editar</button>
+          <button id="edModeThick" class="ed-mode">◫ Gruix</button>
+        </div>
+        <div id="edThickPanel">
+          <div id="edThickInfo">Selecciona una paret</div>
+          <div class="ed-thick-row">
+            <input id="edThickVal" type="number" step="0.01" min="0" placeholder="gruix (m)">
+            <button id="edThickApply">✓</button>
+          </div>
+          <button id="edThickMeasure">📏 Mesurar del núvol</button>
         </div>
         <button id="edNewChain">➕ Nova cadena</button>
         <button id="edHideCloud">👁 Núvol: 100%</button>

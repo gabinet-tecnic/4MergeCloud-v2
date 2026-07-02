@@ -5,7 +5,7 @@ import { TransformControls } from './jsm/controls/TransformControls.js';
 import { loadPLY, loadXYZ } from './loaders/pointcloud_loaders.js';
 
 // ── Versió i feature flags ────────────────────────────────────────────────────
-const APP_VERSION = '2.3.0';
+const APP_VERSION = '2.4.0';
 const FEATURES = {
   segmentacioSemantica: false,  // RANSAC + classificació per tipus
   completatBuits:       false,  // omplir forats basant-se en semàntica
@@ -3902,6 +3902,9 @@ async function _ensureEditor2D() {
 function _edSetModeBtn(m) {
   document.getElementById('edModeDraw')?.classList.toggle('active', m === 'draw');
   document.getElementById('edModeEdit')?.classList.toggle('active', m === 'edit');
+  document.getElementById('edModeThick')?.classList.toggle('active', m === 'thickness');
+  const tp = document.getElementById('edThickPanel');
+  if (tp) tp.style.display = (m === 'thickness') ? 'flex' : 'none';
 }
 
 function _wireEditorButtons(ed) {
@@ -3913,8 +3916,17 @@ function _wireEditorButtons(ed) {
     if (el) el.textContent = c.walls + ' parets, ' + c.nodes + ' nodes';
   };
   ed.onChange = upd;
+  ed.onThick = (info) => {
+    const el = document.getElementById('edThickInfo');
+    if (el) el.textContent = info.status + (info.thickness ? ' — actual: ' + info.thickness.toFixed(2) + ' m' : '');
+    const inp = document.getElementById('edThickVal');
+    if (inp && info.thickness != null) inp.value = info.thickness || '';
+  };
   document.getElementById('edModeDraw').onclick  = () => { ed.setMode('draw'); _edSetModeBtn('draw'); };
   document.getElementById('edModeEdit').onclick  = () => { ed.setMode('edit'); _edSetModeBtn('edit'); };
+  document.getElementById('edModeThick').onclick = () => { ed.setMode('thickness'); _edSetModeBtn('thickness'); };
+  document.getElementById('edThickApply').onclick   = () => ed.applyThickness(parseFloat(document.getElementById('edThickVal').value));
+  document.getElementById('edThickMeasure').onclick = () => ed.startMeasure();
   document.getElementById('edNewChain').onclick  = () => ed.newChain();
   document.getElementById('edHideCloud').onclick = () => {
     const s = ed.cycleCloud();
