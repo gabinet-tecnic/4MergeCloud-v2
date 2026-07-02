@@ -1,10 +1,11 @@
 // Service Worker — Merge Cloud PWA
-const CACHE = 'mergecloud-v17';
+const CACHE = 'mergecloud-v18';
 
 const ASSETS = [
   './index.html',
   './index-ca.html',
   './main.js',
+  './editor2d.js',
   './manifest.json',
   './three/three.module.js',
   './jsm/controls/OrbitControls.js',

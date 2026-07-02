@@ -329,6 +329,57 @@
     #drawExportBtn:hover { background: #1e5090 !important; }
     #drawSegCount { color: #7a9; font-size: 11px; text-align: center; }
 
+    /* Editor de planta 2D estructurat */
+    #editorBar {
+      position: absolute;
+      bottom: 122px; right: 12px;
+      z-index: 20;
+      display: none; /* shown only when a cloud is loaded */
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 6px;
+    }
+    #editorLaunchBtn {
+      background: #6a3aa0;
+      color: #fff;
+      border: none;
+      border-radius: 10px;
+      padding: 10px 18px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      box-shadow: 0 2px 10px rgba(0,0,0,.5);
+    }
+    #editorLaunchBtn.active { background: #8b2020; }
+    #editorTools {
+      background: rgba(14,18,26,.93);
+      border: 1px solid #2a3a4a;
+      border-radius: 12px;
+      padding: 12px;
+      display: none;
+      flex-direction: column;
+      gap: 8px;
+      min-width: 200px;
+      box-shadow: 0 4px 20px rgba(0,0,0,.6);
+    }
+    #editorTools button {
+      width: 100%;
+      padding: 8px 10px;
+      border-radius: 7px;
+      border: 1px solid #2a3a4a;
+      background: #1a2230;
+      color: #cde;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    #editorTools button:hover { background: #233040; }
+    .ed-modes { display: flex; gap: 6px; }
+    .ed-modes button { flex: 1; }
+    .ed-mode.active { background: #6a3aa0; color: #fff; border-color: #6a3aa0; }
+    #edExport { background: #1a4070 !important; color: #adf !important; font-weight: 700; }
+    #edExport:hover { background: #1e5090 !important; }
+    #edCount { color: #a99; font-size: 11px; text-align: center; }
+
     /* Badges */
     .badge {
       position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
@@ -779,6 +830,24 @@
         <button id="drawCloseBtn">✕ Sortir del dibuix</button>
       </div>
       <button id="drawFloatBtn">✏ Dibuix</button>
+    </div>
+
+    <!-- Editor de planta 2D estructurat (nodes + parets) -->
+    <div id="editorBar">
+      <div id="editorTools">
+        <div class="ed-modes">
+          <button id="edModeDraw" class="ed-mode active">✏ Parets</button>
+          <button id="edModeEdit" class="ed-mode">✥ Editar</button>
+        </div>
+        <button id="edNewChain">➕ Nova cadena</button>
+        <button id="edHideCloud">👁 Núvol: 100%</button>
+        <button id="edUndo">↩ Desfer paret</button>
+        <button id="edClear">🗑 Netejar</button>
+        <div id="edCount"></div>
+        <button id="edExport">⬇ Exportar DXF</button>
+        <button id="edClose">✕ Sortir</button>
+      </div>
+      <button id="editorLaunchBtn">📐 Editor planta</button>
     </div>
 
     <div id="loadingBadge"  class="badge">&#9203; Carregant fitxer...</div>
