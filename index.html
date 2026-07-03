@@ -268,132 +268,29 @@
     #viewer.lasso-active { cursor: crosshair; }
     #viewer.annotate-active { cursor: crosshair; }
 
-    /* Draw Overlay (2D canvas for freehand → DXF) */
-    #drawOverlay {
-      position: absolute; inset: 0;
-      z-index: 14;
-      pointer-events: none;
-      cursor: crosshair;
-      touch-action: none;
-    }
-
-    /* Floating Draw Bar */
-    #drawFloatBar {
-      position: absolute;
-      bottom: 68px; right: 12px;
-      z-index: 20;
-      display: none; /* shown only when a cloud is loaded */
-      flex-direction: column;
-      align-items: flex-end;
-      gap: 6px;
-    }
-    #drawFloatBtn {
-      background: #1a7a3a;
-      color: #fff;
-      border: none;
-      border-radius: 10px;
-      padding: 10px 18px;
-      font-size: 14px;
-      font-weight: 600;
-      cursor: pointer;
-      box-shadow: 0 2px 10px rgba(0,0,0,.5);
-      display: flex;
-      align-items: center;
-      gap: 6px;
-    }
-    #drawFloatBtn.active { background: #8b2020; }
-    #drawFloatTools {
-      background: rgba(14,18,26,.93);
-      border: 1px solid #2a3a4a;
-      border-radius: 12px;
-      padding: 12px;
-      display: none;
-      flex-direction: column;
-      gap: 8px;
-      min-width: 190px;
-      box-shadow: 0 4px 20px rgba(0,0,0,.6);
-    }
-    #drawFloatTools select,
-    #drawFloatTools button {
-      width: 100%;
-      padding: 8px 10px;
-      border-radius: 7px;
-      border: 1px solid #2a3a4a;
-      background: #1a2230;
-      color: #cde;
-      font-size: 13px;
-      cursor: pointer;
-    }
-    #drawFloatTools button:hover { background: #233040; }
-    #drawExportBtn { background: #1a4070 !important; color: #adf !important; font-weight: 700; }
-    #drawExportBtn:hover { background: #1e5090 !important; }
-    #drawSegCount { color: #7a9; font-size: 11px; text-align: center; }
-
-    /* Editor de planta 2D estructurat */
-    #editorBar {
-      position: absolute;
-      bottom: 122px; right: 12px;
-      z-index: 20;
-      display: none; /* shown only when a cloud is loaded */
-      flex-direction: column;
-      align-items: flex-end;
-      gap: 6px;
-    }
-    #editorLaunchBtn {
-      background: #6a3aa0;
-      color: #fff;
-      border: none;
-      border-radius: 10px;
-      padding: 10px 18px;
-      font-size: 14px;
-      font-weight: 600;
-      cursor: pointer;
-      box-shadow: 0 2px 10px rgba(0,0,0,.5);
-    }
-    #editorLaunchBtn.active { background: #8b2020; }
-    #editorTools {
-      background: rgba(14,18,26,.93);
-      border: 1px solid #2a3a4a;
-      border-radius: 12px;
-      padding: 12px;
-      display: none;
-      flex-direction: column;
-      gap: 8px;
-      min-width: 200px;
-      box-shadow: 0 4px 20px rgba(0,0,0,.6);
-    }
-    #editorTools button {
-      width: 100%;
-      padding: 8px 10px;
-      border-radius: 7px;
-      border: 1px solid #2a3a4a;
-      background: #1a2230;
-      color: #cde;
-      font-size: 13px;
-      cursor: pointer;
-    }
-    #editorTools button:hover { background: #233040; }
-    .ed-modes { display: flex; gap: 6px; }
+    /* Editor de planta (CAD) — controls dins la caixa d'eines de l'esquerra */
+    #editorTools { display: none; flex-direction: column; gap: 6px; margin-top: 6px; }
+    .ed-modes { display: flex; gap: 4px; }
     .ed-modes button { flex: 1; }
-    .ed-mode.active { background: #6a3aa0; color: #fff; border-color: #6a3aa0; }
-    #edExport { background: #1a4070 !important; color: #adf !important; font-weight: 700; }
-    #edExport:hover { background: #1e5090 !important; }
-    #edCount { color: #a99; font-size: 11px; text-align: center; }
+    .ed-mode.active { background: #3a1e08; border-color: #e07820; color: #f90; }
+    #edCount { color: #a99; font-size: 10px; text-align: center; min-height: 12px; }
+    #edOpInfo { color: #9cf; font-size: 10px; text-align: center; line-height: 1.35; min-height: 0; }
+    #edOpInfo:empty { display: none; }
+    #edExport { background: #0e2a18 !important; border-color: #1a6a30 !important; color: #6f6 !important; font-weight: 700; }
     #edThickPanel {
       display: none; flex-direction: column; gap: 6px;
-      padding: 8px; background: #12161e;
-      border: 1px solid #2a3a4a; border-radius: 8px;
+      padding: 8px; background: #0e1016;
+      border: 1px solid #252840; border-radius: 6px;
     }
-    #edThickInfo { color: #b9a; font-size: 11px; line-height: 1.3; }
+    #edThickInfo { color: #b9a; font-size: 10px; line-height: 1.35; }
     .ed-thick-row { display: flex; gap: 6px; }
     .ed-thick-row input {
       flex: 1; min-width: 0; padding: 6px 8px;
-      border-radius: 6px; border: 1px solid #2a3a4a;
-      background: #0e1218; color: #cde; font-size: 13px;
+      border-radius: 6px; border: 1px solid #252840;
+      background: #0a0c11; color: #cde; font-size: 12px;
     }
     .ed-thick-row button { width: auto !important; padding: 6px 12px !important; }
-    #edThickMeasure { background: #14402f !important; color: #9fe1cb !important; }
-    #edThickMeasure:hover { background: #1a5540 !important; }
+    #edThickMeasure { background: #0e2a18 !important; border-color: #1a6a30 !important; color: #9fe1cb !important; }
 
     /* Badges */
     .badge {
@@ -734,38 +631,6 @@
         </div>
       </div>
 
-      <!-- TRAÇAT 2D → DXF -->
-      <div class="acc">
-        <div class="acc-header" data-acc="accTrace">
-          <span><span class="acc-icon">&#9998;</span>Traçat 2D &rarr; DXF</span>
-          <span class="acc-arrow">&#9654;</span>
-        </div>
-        <div class="acc-body" id="accTrace-body">
-          <!-- Capa activa -->
-          <div class="trace-layer-row">
-            <button id="traceWall"   class="trace-btn trace-active">&#9644; Paret</button>
-            <button id="traceDoor"   class="trace-btn">&#9645; Porta</button>
-            <button id="traceWindow" class="trace-btn">&#9643; Finestra</button>
-          </div>
-          <!-- Mode de dibuix -->
-          <div style="display:flex;gap:4px;margin-bottom:5px">
-            <button id="traceModePolyline" class="trace-btn trace-active" title="Clic per afegir vèrtexs">&#9632; Polilínia</button>
-            <button id="traceModeFree"     class="trace-btn"              title="Arrossega per dibuixar lliurement">&#9999; Lliure</button>
-          </div>
-          <!-- Inici/fi -->
-          <button id="traceToggle" class="btn-orange">&#9998; Iniciar Traçat 2D</button>
-          <button id="traceClose" style="margin-top:4px;display:none;background:#1a2e1a;border-color:#2a6a2a;color:#8f8">&#10003; Tancar Segment</button>
-          <!-- Desfer / netejar -->
-          <div style="display:flex;gap:4px;margin-top:4px">
-            <button id="traceUndoPt"  style="flex:1">&#8617; Desfer</button>
-            <button id="traceClearAll" style="flex:1">&#10005; Esborrar Tot</button>
-          </div>
-          <!-- Export -->
-          <button id="traceExportDXF" style="margin-top:4px;background:#1a3a1a;border-color:#2a6a2a;color:#6f6">&#8659; Exportar DXF</button>
-          <div id="traceStatus" style="font-size:10px;color:#667;margin-top:5px;min-height:28px;line-height:1.5"></div>
-        </div>
-      </div>
-
     </div><!-- /panelScroll -->
 
     <div id="panelBottom">
@@ -776,6 +641,62 @@
       </div>
       <button id="merge">&#8859; UNIR I DESCARREGAR XYZ</button>
       <button id="btnReset">REINICIAR TOT</button>
+
+      <!-- CAIXA D'EINES: EDITOR DE PLANTA (CAD) -->
+      <div class="acc" id="accCADbox" style="margin-top:8px;border-top:1px solid #2a2d40">
+        <div class="acc-header" data-acc="accCAD">
+          <span><span class="acc-icon">&#9645;</span>Editor de Planta (CAD)</span>
+          <span class="acc-arrow">&#9654;</span>
+        </div>
+        <div class="acc-body" id="accCAD-body">
+          <button id="editorLaunchBtn" class="btn-orange">&#128208; Activar editor</button>
+          <div id="editorTools">
+            <div class="ed-modes">
+              <button id="edModeDraw" class="ed-mode active">&#9998; Parets</button>
+              <button id="edModePerim" class="ed-mode">&#9649; Perímetre</button>
+            </div>
+            <div class="ed-modes">
+              <button id="edModeEdit" class="ed-mode">&#10021; Editar</button>
+              <button id="edModeErase" class="ed-mode">&#10005; Esborrar</button>
+              <button id="edModeThick" class="ed-mode">&#9645; Gruix</button>
+            </div>
+            <div class="ed-modes">
+              <button id="edModeEmpalme" class="ed-mode">&#8735; Empalme</button>
+              <button id="edModeExtend" class="ed-mode">&#8594;&#8614; Allargar</button>
+              <button id="edModeTrim" class="ed-mode">&#9986; Retallar</button>
+            </div>
+            <div class="ed-modes">
+              <button id="edModeOpening" class="ed-mode">&#9109; Portes / Finestres</button>
+            </div>
+            <div class="ed-modes" id="edOpTypeRow" style="display:none">
+              <button id="edOpDoor" class="ed-mode active">&#8991; Porta</button>
+              <button id="edOpWindow" class="ed-mode">&#9707; Finestra</button>
+            </div>
+            <div id="edOpInfo"></div>
+            <div id="edThickPanel">
+              <div id="edThickInfo">Selecciona una paret</div>
+              <div class="ed-thick-row">
+                <input id="edThickVal" type="number" step="0.01" min="0" placeholder="gruix (m)">
+                <button id="edThickApply">&#10003;</button>
+              </div>
+              <div class="ed-modes">
+                <button id="edSideCenter" class="ed-mode active">Centrat</button>
+                <button id="edSideA" class="ed-mode">Costat A</button>
+                <button id="edSideB" class="ed-mode">Costat B</button>
+              </div>
+              <button id="edThickMeasure">&#128207; Mesurar del núvol</button>
+              <button id="edThickAll">&#8862; Aplicar gruix a totes</button>
+            </div>
+            <button id="edHideCloud">&#128065; Núvol: 100%</button>
+            <div style="display:flex;gap:4px">
+              <button id="edUndo" style="flex:1">&#8617; Desfer</button>
+              <button id="edClear" style="flex:1">&#128465; Netejar</button>
+            </div>
+            <div id="edCount"></div>
+            <button id="edExport">&#8659; Exportar DXF</button>
+          </div>
+        </div>
+      </div>
     </div>
   </div><!-- /controls -->
 
@@ -828,51 +749,6 @@
 
     <canvas id="lassoCanvas"></canvas>
     <canvas id="annotateCanvas"></canvas>
-    <canvas id="drawOverlay"></canvas>
-
-    <!-- Floating Draw Bar -->
-    <div id="drawFloatBar">
-      <div id="drawFloatTools">
-        <select id="drawLayerSel">
-          <option value="0">🔴 Parets</option>
-          <option value="1">🔵 Obertures / Finestres</option>
-          <option value="2">🟢 Mobiliari</option>
-          <option value="3">🟡 Lliure / Anotació</option>
-        </select>
-        <button id="drawUndoBtn">↩ Desfer traç</button>
-        <button id="drawExportBtn">⬇ Exportar DXF</button>
-        <div id="drawSegCount"></div>
-        <button id="drawCloseBtn">✕ Sortir del dibuix</button>
-      </div>
-      <button id="drawFloatBtn">✏ Dibuix</button>
-    </div>
-
-    <!-- Editor de planta 2D estructurat (nodes + parets) -->
-    <div id="editorBar">
-      <div id="editorTools">
-        <div class="ed-modes">
-          <button id="edModeDraw" class="ed-mode active">✏ Parets</button>
-          <button id="edModeEdit" class="ed-mode">✥ Editar</button>
-          <button id="edModeThick" class="ed-mode">◫ Gruix</button>
-        </div>
-        <div id="edThickPanel">
-          <div id="edThickInfo">Selecciona una paret</div>
-          <div class="ed-thick-row">
-            <input id="edThickVal" type="number" step="0.01" min="0" placeholder="gruix (m)">
-            <button id="edThickApply">✓</button>
-          </div>
-          <button id="edThickMeasure">📏 Mesurar del núvol</button>
-        </div>
-        <button id="edNewChain">➕ Nova cadena</button>
-        <button id="edHideCloud">👁 Núvol: 100%</button>
-        <button id="edUndo">↩ Desfer paret</button>
-        <button id="edClear">🗑 Netejar</button>
-        <div id="edCount"></div>
-        <button id="edExport">⬇ Exportar DXF</button>
-        <button id="edClose">✕ Sortir</button>
-      </div>
-      <button id="editorLaunchBtn">📐 Editor planta</button>
-    </div>
 
     <div id="loadingBadge"  class="badge">&#9203; Carregant fitxer...</div>
     <div id="measureBadge"  class="badge">&#128207; Mode mesura — fes clic a dos punts del núvol</div>

@@ -1,5 +1,5 @@
 // Service Worker — Merge Cloud PWA
-const CACHE = 'mergecloud-v19';
+const CACHE = 'mergecloud-v24';
 
 const ASSETS = [
   './index.html',
