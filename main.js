@@ -5,7 +5,7 @@ import { TransformControls } from './jsm/controls/TransformControls.js';
 import { loadPLY, loadXYZ } from './loaders/pointcloud_loaders.js';
 
 // ── Versió i feature flags ────────────────────────────────────────────────────
-const APP_VERSION = '2.4.0';
+const APP_VERSION = '2.9.0';
 const FEATURES = {
   segmentacioSemantica: false,  // RANSAC + classificació per tipus
   completatBuits:       false,  // omplir forats basant-se en semàntica
@@ -1956,10 +1956,6 @@ function setupUI() {
         onWindowResize();
         fitCameraToObject(cloud);
         updateRaycasterThreshold();
-        const _dBar = document.getElementById('drawFloatBar');
-        if (_dBar) _dBar.style.display = 'flex';
-        const _eBar = document.getElementById('editorBar');
-        if (_eBar && FEATURES.editorPlanta) _eBar.style.display = 'flex';
       }
     } finally {
       _loading = false;
@@ -2282,25 +2278,6 @@ function setupUI() {
   orthoBtn('viewA_right', new THREE.Vector3( 1, 0, 0), new THREE.Vector3(0, 1, 0));
   orthoBtn('viewA_left',  new THREE.Vector3(-1, 0, 0), new THREE.Vector3(0, 1, 0));
 
-  // ── Traçat 2D → DXF ──
-  ['traceWall','traceDoor','traceWindow'].forEach(id => {
-    const btn = document.getElementById(id);
-    if (!btn) return;
-    btn.onclick = () => {
-      document.querySelectorAll('.trace-btn').forEach(b => b.classList.remove('trace-active'));
-      btn.classList.add('trace-active');
-      const layerMap = { traceWall:'PARETS', traceDoor:'PORTES', traceWindow:'FINESTRES' };
-      setTraceLayer(layerMap[id]);
-    };
-  });
-  const _btnTraceToggle = document.getElementById('traceToggle');
-  if (_btnTraceToggle) _btnTraceToggle.onclick = toggleTracing;
-  const _btnTraceUndo = document.getElementById('traceUndoPt');
-  if (_btnTraceUndo) _btnTraceUndo.onclick = traceUndoPoint;
-  const _btnTraceClear = document.getElementById('traceClearAll');
-  if (_btnTraceClear) _btnTraceClear.onclick = traceClearAll;
-  const _btnTraceExport = document.getElementById('traceExportDXF');
-  if (_btnTraceExport) _btnTraceExport.onclick = traceExportDXF;
 }
 
 // ─────────────────────────────────────────────
@@ -2500,6 +2477,9 @@ function onPointerDown(event) {
 
   // ── Mode caixa de tall activa: clic fora de la caixa torna al núvol ──
   if (appMode === 'clipbox_translate' || appMode === 'clipbox_rotate') {
+    // si l'usuari està agafant el gizmo (les fletxes sobresurten de la caixa),
+    // NO desenganxis — si no, el moviment es cancel·laria a l'instant
+    if (transformControls.dragging || transformControls.axis) return;
     raycaster.setFromCamera(mouse, activeCam);
     const box = getActiveClipBox();
     if (box) {
@@ -3332,68 +3312,8 @@ INSTRUCCIONS:
 let _aiVoiceRec = null;
 
 // ─────────────────────────────────────────────
-// Traçat 2D → DXF
+// Raycast pantalla → món (helper compartit per l'editor de planta)
 // ─────────────────────────────────────────────
-const TRACE_LAYERS = {
-  PARETS:    { color: 0xff4444, dxfColor: 1 },
-  OBERTURES: { color: 0x4488ff, dxfColor: 5 },
-  MOBILIARI: { color: 0x44cc66, dxfColor: 3 },
-  ANOTACIO:  { color: 0xffcc00, dxfColor: 2 },
-  // llegat (UI d'accordion antiga)
-  PORTES:    { color: 0x00ccff, dxfColor: 4 },
-  FINESTRES: { color: 0xffee00, dxfColor: 2 },
-};
-
-// Mapeig índex del selector de dibuix (0-3) → clau de capa
-const _D_LAYER_KEYS = ['PARETS', 'OBERTURES', 'MOBILIARI', 'ANOTACIO'];
-let _tracing          = false;
-let _traceMode        = 'polyline'; // 'polyline' | 'free'
-let _traceLayer       = 'PARETS';
-let _tracePts         = [];
-let _traceSegments    = [];
-let _tracePreview     = null;
-let _traceCurrentLine = null;
-let _traceFreeDown    = false; // free-draw: mouse held
-
-function _traceStatusUpdate() {
-  const el = document.getElementById('traceStatus');
-  if (!el) return;
-  const segs = _traceSegments.length;
-  const pts  = _tracePts.length;
-  const closeBtn = document.getElementById('traceClose');
-  if (!_tracing) {
-    el.textContent = segs > 0 ? segs + ' segment(s) guardats. Prem Exportar DXF.' : '';
-    if (closeBtn) closeBtn.style.display = 'none';
-    return;
-  }
-  if (_traceMode === 'polyline') {
-    if (pts === 0)
-      el.textContent = 'Capa: ' + _traceLayer + ' — fes clic per afegir vèrtexs.';
-    else
-      el.textContent = pts + ' punt(s) en curs. Prem "Tancar Segment" per guardar.';
-    if (closeBtn) closeBtn.style.display = pts >= 2 ? 'block' : 'none';
-  } else {
-    el.textContent = 'Mode lliure — manté el botó del ratolí premut i arrossega.';
-    if (closeBtn) closeBtn.style.display = 'none';
-  }
-  if (segs > 0) el.textContent += '\n' + segs + ' segment(s) guardats.';
-}
-
-function setTraceLayer(layer) {
-  _traceLayer = layer;
-  _traceStatusUpdate();
-}
-
-function setTraceMode(mode) {
-  _traceMode = mode;
-  document.getElementById('traceModePolyline')?.classList.toggle('trace-active', mode === 'polyline');
-  document.getElementById('traceModeFree')?.classList.toggle('trace-active',     mode === 'free');
-  // Commit open polyline when switching modes
-  if (_tracePts.length >= 2) _traceCommitSegment();
-  else { _tracePts = []; _updateCurrentLine(); }
-  _traceStatusUpdate();
-}
-
 function _traceRaycast(clientX, clientY) {
   const rect = renderer.domElement.getBoundingClientRect();
   const nx = ((clientX - rect.left) / rect.width)  * 2 - 1;
@@ -3416,470 +3336,13 @@ function _traceRaycast(clientX, clientY) {
   return target;
 }
 
-function _buildLineFromPoints(pts, color) {
-  if (pts.length < 2) return null;
-  const geo = new THREE.BufferGeometry().setFromPoints(pts);
-  const mat = new THREE.LineBasicMaterial({ color, depthTest: false, linewidth: 2 });
-  return new THREE.Line(geo, mat);
-}
-
-function _updateCurrentLine() {
-  if (_traceCurrentLine) { scene.remove(_traceCurrentLine); _traceCurrentLine = null; }
-  if (_tracePts.length < 2) return;
-  const cfg = TRACE_LAYERS[_traceLayer];
-  _traceCurrentLine = _buildLineFromPoints([..._tracePts], cfg.color);
-  _traceCurrentLine.renderOrder = 999;
-  scene.add(_traceCurrentLine);
-}
-
-function _updatePreview(clientX, clientY) {
-  if (_tracePreview) { scene.remove(_tracePreview); _tracePreview = null; }
-  if (_tracePts.length === 0) return;
-  const worldPt = _traceRaycast(clientX, clientY);
-  if (!worldPt) return;
-  const cfg = TRACE_LAYERS[_traceLayer];
-  const mat = new THREE.LineDashedMaterial({ color: cfg.color, dashSize: 0.05, gapSize: 0.03, depthTest: false });
-  const geo = new THREE.BufferGeometry().setFromPoints([_tracePts[_tracePts.length - 1], worldPt]);
-  _tracePreview = new THREE.Line(geo, mat);
-  _tracePreview.computeLineDistances();
-  _tracePreview.renderOrder = 999;
-  scene.add(_tracePreview);
-}
-
-function toggleTracing() {
-  _tracing = !_tracing;
-  const btn    = document.getElementById('traceToggle');
-  const viewer = document.getElementById('viewer');
-  if (_tracing) {
-    btn.textContent = '⏹ Aturar Traçat';
-    btn.classList.add('tracing');
-    viewer.classList.add('trace-mode');
-    controls.enabled = false;
-    if (orthoControls) orthoControls.enabled = false;
-    if (!useOrtho) setOrthoView(new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, -1));
-  } else {
-    btn.textContent = '✏ Iniciar Traçat 2D';
-    btn.classList.remove('tracing');
-    viewer.classList.remove('trace-mode');
-    controls.enabled = true;
-    if (orthoControls) orthoControls.enabled = true;
-    if (_tracePreview) { scene.remove(_tracePreview); _tracePreview = null; }
-    if (_tracePts.length >= 2) _traceCommitSegment();
-    else { _tracePts = []; _updateCurrentLine(); }
-  }
-  _traceStatusUpdate();
-}
-
-function _traceCommitSegment() {
-  if (_tracePts.length < 2) { _tracePts = []; _updateCurrentLine(); return; }
-  if (_traceCurrentLine) { scene.remove(_traceCurrentLine); _traceCurrentLine = null; }
-  const cfg = TRACE_LAYERS[_traceLayer];
-  const lineObj = _buildLineFromPoints([..._tracePts], cfg.color);
-  if (lineObj) { lineObj.renderOrder = 999; scene.add(lineObj); }
-  _traceSegments.push({ layer: _traceLayer, points: [..._tracePts], lineObj });
-  _tracePts = [];
-  _traceCurrentLine = null;
-  _traceStatusUpdate();
-}
-
-// ── Polyline mode handlers ────────────────────────────────────────────────────
-function _tracePolyClick(event) {
-  if (!_tracing || _traceMode !== 'polyline') return;
-  event.stopPropagation();
-  const pt = _traceRaycast(event.clientX, event.clientY);
-  if (!pt) return;
-  _tracePts.push(pt);
-  _updateCurrentLine();
-  _traceStatusUpdate();
-}
-
-function _tracePolyMove(event) {
-  if (!_tracing || _traceMode !== 'polyline' || _tracePts.length === 0) return;
-  _updatePreview(event.clientX, event.clientY);
-}
-
-// ── Free-draw mode handlers ───────────────────────────────────────────────────
-let _traceFreeLastPt = null;
-const FREE_MIN_DIST = 0.05; // metres between sampled points
-
-function _traceFreeDn(event) {
-  if (!_tracing || _traceMode !== 'free') return;
-  event.preventDefault();
-  event.stopImmediatePropagation(); // prevent Three.js onPointerDown on same element
-  _traceFreeDown = true;
-  _traceFreeLastPt = null;
-  _tracePts = [];
-  const pt = _traceRaycast(event.clientX, event.clientY);
-  if (pt) { _tracePts.push(pt); _traceFreeLastPt = pt; }
-}
-
-function _traceFreeMv(event) {
-  if (!_tracing || _traceMode !== 'free' || !_traceFreeDown) return;
-  event.preventDefault(); // prevent page scroll during draw on touch
-  const pt = _traceRaycast(event.clientX, event.clientY);
-  if (!pt) return;
-  if (!_traceFreeLastPt || pt.distanceTo(_traceFreeLastPt) > FREE_MIN_DIST) {
-    _tracePts.push(pt);
-    _traceFreeLastPt = pt;
-    _updateCurrentLine();
-  }
-}
-
-function _traceFreeUp(event) {
-  if (!_tracing || _traceMode !== 'free' || !_traceFreeDown) return;
-  _traceFreeDown = false;
-  _traceFreeLastPt = null;
-  if (_tracePts.length >= 2) _traceCommitSegment();
-  else { _tracePts = []; _updateCurrentLine(); }
-}
-
-// ── Undo / clear ─────────────────────────────────────────────────────────────
-function traceUndoPoint() {
-  if (_tracePts.length > 0) {
-    _tracePts.pop();
-    _updateCurrentLine();
-    if (_tracePreview) { scene.remove(_tracePreview); _tracePreview = null; }
-  } else if (_traceSegments.length > 0) {
-    const last = _traceSegments.pop();
-    if (last.lineObj) scene.remove(last.lineObj);
-  }
-  _traceStatusUpdate();
-}
-
-function traceClearAll() {
-  if (_traceSegments.length === 0 && _tracePts.length === 0) return;
-  if (!confirm('Esborrar tots els segments traçats?')) return;
-  _traceSegments.forEach(s => { if (s.lineObj) scene.remove(s.lineObj); });
-  _traceSegments = [];
-  _tracePts = [];
-  if (_traceCurrentLine) { scene.remove(_traceCurrentLine); _traceCurrentLine = null; }
-  if (_tracePreview) { scene.remove(_tracePreview); _tracePreview = null; }
-  _traceStatusUpdate();
-}
-
-// ── Ajust geomètric: línia i arc (per a exportació neta) ─────────────────────
-
-// PCA per trobar la millor línia recta (retorna endpoints nets i error RMS)
-function _fitLine2D(pts) {
-  const n = pts.length;
-  let mx = 0, mz = 0;
-  for (const p of pts) { mx += p.x; mz += p.z; }
-  mx /= n; mz /= n;
-
-  let sxx = 0, sxz = 0, szz = 0;
-  for (const p of pts) {
-    const dx = p.x - mx, dz = p.z - mz;
-    sxx += dx * dx; sxz += dx * dz; szz += dz * dz;
-  }
-  const angle = 0.5 * Math.atan2(2 * sxz, sxx - szz);
-  const dirX = Math.cos(angle), dirZ = Math.sin(angle);
-
-  let tmin = Infinity, tmax = -Infinity, rms = 0;
-  for (const p of pts) {
-    const t    =  (p.x - mx) * dirX + (p.z - mz) * dirZ;
-    const perp = -(p.x - mx) * dirZ + (p.z - mz) * dirX;
-    rms += perp * perp;
-    if (t < tmin) tmin = t;
-    if (t > tmax) tmax = t;
-  }
-  return {
-    x1: mx + dirX * tmin, z1: mz + dirZ * tmin,
-    x2: mx + dirX * tmax, z2: mz + dirZ * tmax,
-    rms: Math.sqrt(rms / n),
-    len: tmax - tmin,
-  };
-}
-
-// Ajust de cercle (mètode Taubin). Retorna {cx,cz,r,a1,a2,rms} o null
-function _fitArc2D(pts) {
-  const n = pts.length;
-  if (n < 4) return null;
-
-  let mx = 0, mz = 0;
-  for (const p of pts) { mx += p.x; mz += p.z; }
-  mx /= n; mz /= n;
-
-  let Mxx=0, Mzz=0, Mxz=0, Mxxx=0, Mzzz=0, Mxxz=0, Mxzz=0;
-  for (const p of pts) {
-    const x = p.x - mx, z = p.z - mz;
-    Mxx += x*x; Mzz += z*z; Mxz += x*z;
-    Mxxx += x*x*x; Mzzz += z*z*z; Mxxz += x*x*z; Mxzz += x*z*z;
-  }
-  Mxx/=n; Mzz/=n; Mxz/=n; Mxxx/=n; Mzzz/=n; Mxxz/=n; Mxzz/=n;
-
-  const det = Mxx * Mzz - Mxz * Mxz;
-  if (Math.abs(det) < 1e-12) return null;
-
-  const bx = -(Mxxx + Mxzz) / 2;
-  const bz = -(Mxxz + Mzzz) / 2;
-  const cx0 = ( bx * Mzz - bz * Mxz) / det;
-  const cz0 = (-bx * Mxz + bz * Mxx) / det;
-  const cx = cx0 + mx, cz = cz0 + mz;
-
-  let r = 0;
-  for (const p of pts) r += Math.hypot(p.x - cx, p.z - cz);
-  r /= n;
-
-  // Radi massa gran = pràcticament una línia recta
-  const lineFit = _fitLine2D(pts);
-  if (r > lineFit.len * 20) return null;
-
-  let rms = 0;
-  for (const p of pts) { const d = Math.hypot(p.x - cx, p.z - cz) - r; rms += d*d; }
-  rms = Math.sqrt(rms / n);
-
-  // Angles inici i fi (en graus, sentit antihorari)
-  const a1 = (Math.atan2(pts[0].z - cz, pts[0].x - cx) * 180 / Math.PI + 360) % 360;
-  const a2 = (Math.atan2(pts[n-1].z - cz, pts[n-1].x - cx) * 180 / Math.PI + 360) % 360;
-
-  return { cx, cz, r, a1, a2, rms };
-}
-
-// Decideix si un segment s'ha d'exportar com a LINE o ARC
-function _fitSegment(pts) {
-  if (pts.length < 2) return null;
-  if (pts.length === 2) return { type: 'line', ...pts[0], ...{ x1:pts[0].x,z1:pts[0].z,x2:pts[1].x,z2:pts[1].z } };
-
-  const line = _fitLine2D(pts);
-  const arc  = _fitArc2D(pts);
-
-  // Usa arc si l'error és < 40% de l'error de línia i és un arc visible
-  if (arc && arc.rms < line.rms * 0.4 && arc.rms < line.len * 0.05) {
-    return { type: 'arc', ...arc };
-  }
-  return { type: 'line', ...line };
-}
-
-// ── DXF export ────────────────────────────────────────────────────────────────
-function traceExportDXF() {
-  if (_tracePts.length >= 2) _traceCommitSegment();
-
-  if (_traceSegments.length === 0) {
-    alert('No hi ha cap segment traçat per exportar.\nDibuixa alguna línia primer.');
-    return;
-  }
-
-  const allSegs  = _traceSegments;
-  const layers   = [...new Set(allSegs.map(s => s.layer))];
-  const colorMap = { PARETS: 1, OBERTURES: 5, MOBILIARI: 3, ANOTACIO: 2, PORTES: 4, FINESTRES: 2 };
-  const R = '\r\n';
-
-  let dxf = '';
-  dxf += '0'+R+'SECTION'+R+'2'+R+'HEADER'+R;
-  dxf += '9'+R+'$ACADVER'+R+'1'+R+'AC1009'+R;
-  dxf += '0'+R+'ENDSEC'+R;
-
-  dxf += '0'+R+'SECTION'+R+'2'+R+'TABLES'+R;
-  dxf += '0'+R+'TABLE'+R+'2'+R+'LAYER'+R+'70'+R+layers.length+R;
-  layers.forEach(lyr => {
-    dxf += '0'+R+'LAYER'+R+'2'+R+lyr+R+'70'+R+'0'+R+'62'+R+(colorMap[lyr]||7)+R+'6'+R+'CONTINUOUS'+R;
-  });
-  dxf += '0'+R+'ENDTAB'+R+'0'+R+'ENDSEC'+R;
-
-  dxf += '0'+R+'SECTION'+R+'2'+R+'ENTITIES'+R;
-
-  let nLines = 0, nArcs = 0;
-  allSegs.forEach(seg => {
-    const fit = _fitSegment(seg.points);
-    if (!fit) return;
-
-    if (fit.type === 'line') {
-      dxf += '0'+R+'LINE'+R+'8'+R+seg.layer+R;
-      dxf += '10'+R+fit.x1.toFixed(4)+R+'20'+R+fit.z1.toFixed(4)+R+'30'+R+'0.0'+R;
-      dxf += '11'+R+fit.x2.toFixed(4)+R+'21'+R+fit.z2.toFixed(4)+R+'31'+R+'0.0'+R;
-      nLines++;
-    } else {
-      // ARC: center, radius, start/end angle
-      dxf += '0'+R+'ARC'+R+'8'+R+seg.layer+R;
-      dxf += '10'+R+fit.cx.toFixed(4)+R+'20'+R+fit.cz.toFixed(4)+R+'30'+R+'0.0'+R;
-      dxf += '40'+R+fit.r.toFixed(4)+R;
-      dxf += '50'+R+fit.a1.toFixed(4)+R;
-      dxf += '51'+R+fit.a2.toFixed(4)+R;
-      nArcs++;
-    }
-  });
-
-  dxf += '0'+R+'ENDSEC'+R+'0'+R+'EOF'+R;
-
-  const filename = 'tracat_' + new Date().toISOString().slice(0, 10) + '.dxf';
-  const blob = new Blob([dxf], { type: 'application/dxf' });
-  const url  = URL.createObjectURL(blob);
-  const a    = document.createElement('a');
-  a.href = url; a.download = filename;
-  document.body.appendChild(a); a.click(); document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-
-  document.getElementById('traceStatus').textContent =
-    '✓ ' + filename + ' — ' + nLines + ' línies' + (nArcs > 0 ? ', ' + nArcs + ' arcs' : '') + ' (geometria ajustada)';
-}
-
-function initTracing() {
-  const canvas = renderer?.domElement;
-  if (!canvas) return;
-
-  // Polyline mode
-  canvas.addEventListener('click',     _tracePolyClick, { capture: true });
-  canvas.addEventListener('mousemove', _tracePolyMove,  { passive: true });
-
-  // Free-draw mode — pointer events work for mouse, touch and stylus
-  canvas.addEventListener('pointerdown',   _traceFreeDn, { capture: true });
-  canvas.addEventListener('pointermove',   _traceFreeMv, { capture: true });
-  canvas.addEventListener('pointerup',     _traceFreeUp, { capture: true });
-  canvas.addEventListener('pointercancel', _traceFreeUp, { capture: true });
-
-  // Buttons
-  const closeBtn = document.getElementById('traceClose');
-  if (closeBtn) closeBtn.addEventListener('click', () => { _traceCommitSegment(); _traceStatusUpdate(); });
-
-  const mPolyBtn = document.getElementById('traceModePolyline');
-  const mFreeBtn = document.getElementById('traceModeFree');
-  if (mPolyBtn) mPolyBtn.addEventListener('click', () => setTraceMode('polyline'));
-  if (mFreeBtn) mFreeBtn.addEventListener('click', () => setTraceMode('free'));
-}
-
-// ─────────────────────────────────────────────
-// Draw Overlay — 2D freehand canvas → DXF
-// ─────────────────────────────────────────────
-let _dCtx         = null;
-let _dActive      = false;
-let _dStroke      = []; // [{clientX, clientY}] current stroke screen coords
-let _dLayer       = 0;
-
-const _D_LAYER_COLORS = ['#ff4444', '#4488ff', '#44cc66', '#ffcc00'];
-
-function initDrawOverlay() {
-  const overlay = document.getElementById('drawOverlay');
-  if (!overlay) return;
-  const viewer  = document.getElementById('viewer');
-
-  function _syncSize() {
-    const dpr = window.devicePixelRatio || 1;
-    const w = viewer.clientWidth;
-    const h = viewer.clientHeight;
-    overlay.width  = w * dpr;
-    overlay.height = h * dpr;
-    overlay.style.width  = w + 'px';
-    overlay.style.height = h + 'px';
-    _dCtx = overlay.getContext('2d');
-    _dCtx.scale(dpr, dpr);
-  }
-  requestAnimationFrame(_syncSize); // defer until layout is ready
-  window.addEventListener('resize', _syncSize);
-
-  overlay.addEventListener('pointerdown',   _dDn, { capture: true });
-  overlay.addEventListener('pointermove',   _dMv, { capture: true });
-  overlay.addEventListener('pointerup',     _dUp, { capture: true });
-  overlay.addEventListener('pointercancel', _dUp, { capture: true });
-
-  document.getElementById('drawFloatBtn')?.addEventListener('click', toggleDrawOverlay);
-  document.getElementById('drawCloseBtn')?.addEventListener('click', toggleDrawOverlay);
-  document.getElementById('drawLayerSel')?.addEventListener('change', e => {
-    _dLayer = parseInt(e.target.value);
-    _traceLayer = _D_LAYER_KEYS[_dLayer] || 'PARETS';
-  });
-  document.getElementById('drawUndoBtn')?.addEventListener('click', _dUndo);
-  document.getElementById('drawExportBtn')?.addEventListener('click', traceExportDXF);
-}
-
-function toggleDrawOverlay() {
-  _dActive = !_dActive;
-  const overlay = document.getElementById('drawOverlay');
-  const tools   = document.getElementById('drawFloatTools');
-  const btn     = document.getElementById('drawFloatBtn');
-
-  if (_dActive) {
-    if (_ed2dActive) toggleEditor2D();   // no conviuen: tanca l'editor de planta
-    overlay.style.pointerEvents = 'auto';
-    tools.style.display = 'flex';
-    btn.textContent = '⏹ Aturar';
-    btn.classList.add('active');
-    // Enter top-down ortho + disable orbit
-    _tracing = true;
-    controls.enabled = false;
-    if (orthoControls) orthoControls.enabled = false;
-    if (!useOrtho) setOrthoView(new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, -1));
-    _dUpdateCount();
-  } else {
-    overlay.style.pointerEvents = 'none';
-    if (_dCtx) _dCtx.clearRect(0, 0, overlay.width / (window.devicePixelRatio||1), overlay.height / (window.devicePixelRatio||1));
-    tools.style.display = 'none';
-    btn.textContent = '✏ Dibuix';
-    btn.classList.remove('active');
-    // Commit any pending, re-enable orbit
-    if (_tracePts.length >= 2) _traceCommitSegment();
-    else { _tracePts = []; _updateCurrentLine(); }
-    _tracing = false;
-    controls.enabled = true;
-    if (orthoControls) orthoControls.enabled = true;
-  }
-}
-
-function _dDn(event) {
-  event.preventDefault();
-  event.stopImmediatePropagation();
-  _dStroke = [{ clientX: event.clientX, clientY: event.clientY }];
-  const color = _D_LAYER_COLORS[_dLayer] || '#ff4444';
-  const overlay = document.getElementById('drawOverlay');
-  const r = overlay.getBoundingClientRect();
-  _dCtx.clearRect(0, 0, overlay.width, overlay.height); // clear previous ghost stroke
-  _dCtx.beginPath();
-  _dCtx.moveTo(event.clientX - r.left, event.clientY - r.top);
-  _dCtx.strokeStyle = color;
-  _dCtx.lineWidth = 2.5;
-  _dCtx.lineCap = 'round';
-  _dCtx.lineJoin = 'round';
-  _dCtx.globalAlpha = 0.85;
-}
-
-function _dMv(event) {
-  if (!_dStroke.length) return;
-  event.preventDefault();
-  _dStroke.push({ clientX: event.clientX, clientY: event.clientY });
-  const r = document.getElementById('drawOverlay').getBoundingClientRect();
-  _dCtx.lineTo(event.clientX - r.left, event.clientY - r.top);
-  _dCtx.stroke();
-}
-
-function _dUp(event) {
-  if (!_dStroke.length) return;
-  event.preventDefault();
-  // Project every screen point to 3D world
-  _tracePts = _dStroke.map(p => _traceRaycast(p.clientX, p.clientY)).filter(Boolean);
-  _dStroke = [];
-  // Clear ghost stroke (3D committed line takes over visually)
-  const overlay = document.getElementById('drawOverlay');
-  const dpr = window.devicePixelRatio || 1;
-  _dCtx.clearRect(0, 0, overlay.width / dpr, overlay.height / dpr);
-  if (_tracePts.length >= 2) {
-    _traceLayer = _D_LAYER_KEYS[_dLayer] || 'PARETS';
-    _traceCommitSegment();
-    _dUpdateCount();
-  } else {
-    _tracePts = [];
-  }
-}
-
-function _dUndo() {
-  if (!_traceSegments.length) return;
-  const seg = _traceSegments.pop();
-  if (seg.lineObj) scene.remove(seg.lineObj);
-  _traceStatusUpdate();
-  _dUpdateCount();
-}
-
-function _dUpdateCount() {
-  const el = document.getElementById('drawSegCount');
-  if (!el) return;
-  const n = _traceSegments.length;
-  el.textContent = n === 0 ? '' : n + ' traç' + (n > 1 ? 'os dibuixats' : ' dibuixat');
-}
-
 // ─────────────────────────────────────────────
 // Editor de planta 2D estructurat (mòdul aïllat editor2d.js)
 // ─────────────────────────────────────────────
 let _ed2d       = null;
 let _ed2dActive = false;
 let _ed2dWired  = false;
+let _edPrevOrtho = false;   // vista abans d'entrar a l'editor (per restaurar-la)
 
 async function _ensureEditor2D() {
   if (_ed2d) return _ed2d;
@@ -3892,7 +3355,7 @@ async function _ensureEditor2D() {
     setControlsEnabled: (b) => {
       controls.enabled = b;
       if (orthoControls) orthoControls.enabled = b;
-      if (transformControls) { transformControls.enabled = b; transformControls.visible = b; }
+      if (transformControls) transformControls.enabled = b;
     },
     getClouds:          () => clouds,
   });
@@ -3901,10 +3364,20 @@ async function _ensureEditor2D() {
 
 function _edSetModeBtn(m) {
   document.getElementById('edModeDraw')?.classList.toggle('active', m === 'draw');
+  document.getElementById('edModePerim')?.classList.toggle('active', m === 'perimeter');
   document.getElementById('edModeEdit')?.classList.toggle('active', m === 'edit');
+  document.getElementById('edModeErase')?.classList.toggle('active', m === 'erase');
   document.getElementById('edModeThick')?.classList.toggle('active', m === 'thickness');
+  document.getElementById('edModeEmpalme')?.classList.toggle('active', m === 'empalme');
+  document.getElementById('edModeExtend')?.classList.toggle('active', m === 'extend');
+  document.getElementById('edModeTrim')?.classList.toggle('active', m === 'trim');
+  document.getElementById('edModeOpening')?.classList.toggle('active', m === 'opening');
   const tp = document.getElementById('edThickPanel');
   if (tp) tp.style.display = (m === 'thickness') ? 'flex' : 'none';
+  const otr = document.getElementById('edOpTypeRow');
+  if (otr) otr.style.display = (m === 'opening') ? 'flex' : 'none';
+  const oi = document.getElementById('edOpInfo');
+  if (oi && !['empalme','extend','trim','opening'].includes(m)) oi.textContent = '';
 }
 
 function _wireEditorButtons(ed) {
@@ -3913,21 +3386,38 @@ function _wireEditorButtons(ed) {
   const upd = () => {
     const c = ed.count();
     const el = document.getElementById('edCount');
-    if (el) el.textContent = c.walls + ' parets, ' + c.nodes + ' nodes';
+    if (el) el.textContent = c.walls + ' parets, ' + c.nodes + ' nodes' + (c.openings ? ', ' + c.openings + ' obertures' : '');
   };
   ed.onChange = upd;
   ed.onThick = (info) => {
     const el = document.getElementById('edThickInfo');
     if (el) el.textContent = info.status + (info.thickness ? ' — actual: ' + info.thickness.toFixed(2) + ' m' : '');
     const inp = document.getElementById('edThickVal');
-    if (inp && info.thickness != null) inp.value = info.thickness || '';
+    if (inp && info.thickness) inp.value = info.thickness;   // no buidis el camp si la paret no té gruix
   };
   document.getElementById('edModeDraw').onclick  = () => { ed.setMode('draw'); _edSetModeBtn('draw'); };
+  document.getElementById('edModePerim').onclick = () => { ed.setMode('perimeter'); _edSetModeBtn('perimeter'); };
   document.getElementById('edModeEdit').onclick  = () => { ed.setMode('edit'); _edSetModeBtn('edit'); };
+  document.getElementById('edModeErase').onclick = () => { ed.setMode('erase'); _edSetModeBtn('erase'); };
   document.getElementById('edModeThick').onclick = () => { ed.setMode('thickness'); _edSetModeBtn('thickness'); };
+  document.getElementById('edModeEmpalme').onclick = () => { ed.setMode('empalme'); _edSetModeBtn('empalme'); };
+  document.getElementById('edModeExtend').onclick  = () => { ed.setMode('extend'); _edSetModeBtn('extend'); };
+  document.getElementById('edModeTrim').onclick    = () => { ed.setMode('trim'); _edSetModeBtn('trim'); };
+  document.getElementById('edModeOpening').onclick = () => { ed.setMode('opening'); _edSetModeBtn('opening'); };
+  document.getElementById('edOpDoor').onclick   = () => { ed.setOpType('door'); document.getElementById('edOpDoor').classList.add('active'); document.getElementById('edOpWindow').classList.remove('active'); };
+  document.getElementById('edOpWindow').onclick = () => { ed.setOpType('window'); document.getElementById('edOpWindow').classList.add('active'); document.getElementById('edOpDoor').classList.remove('active'); };
+  ed.onOp = (msg) => { const oi = document.getElementById('edOpInfo'); if (oi) oi.textContent = msg; };
   document.getElementById('edThickApply').onclick   = () => ed.applyThickness(parseFloat(document.getElementById('edThickVal').value));
   document.getElementById('edThickMeasure').onclick = () => ed.startMeasure();
-  document.getElementById('edNewChain').onclick  = () => ed.newChain();
+  const _setSide = (s, btn) => {
+    ed.setSelSide(s);
+    ['edSideCenter','edSideA','edSideB'].forEach(id => document.getElementById(id)?.classList.remove('active'));
+    document.getElementById(btn)?.classList.add('active');
+  };
+  document.getElementById('edSideCenter').onclick = () => _setSide(0, 'edSideCenter');
+  document.getElementById('edSideA').onclick      = () => _setSide(1, 'edSideA');
+  document.getElementById('edSideB').onclick      = () => _setSide(-1, 'edSideB');
+  document.getElementById('edThickAll').onclick   = () => ed.applyThicknessAll(parseFloat(document.getElementById('edThickVal').value));
   document.getElementById('edHideCloud').onclick = () => {
     const s = ed.cycleCloud();
     document.getElementById('edHideCloud').textContent = '👁 Núvol: ' + s;
@@ -3935,7 +3425,6 @@ function _wireEditorButtons(ed) {
   document.getElementById('edUndo').onclick   = () => { ed.undo(); upd(); };
   document.getElementById('edClear').onclick  = () => { if (confirm('Esborrar tota la planta?')) { ed.clear(); upd(); } };
   document.getElementById('edExport').onclick = () => ed.exportDXF();
-  document.getElementById('edClose').onclick  = () => toggleEditor2D();
 }
 
 async function toggleEditor2D() {
@@ -3949,7 +3438,8 @@ async function toggleEditor2D() {
   const btn   = document.getElementById('editorLaunchBtn');
 
   if (_ed2dActive) {
-    if (_dActive) toggleDrawOverlay();   // no conviuen: tanca el dibuix lliure
+    _edPrevOrtho = useOrtho;                              // recorda la vista actual
+    if (transformControls) transformControls.detach();   // amaga el gizmo del núvol
     ed.setActive(true);
     tools.style.display = 'flex';
     btn.textContent = '⏹ Aturar editor';
@@ -3958,8 +3448,13 @@ async function toggleEditor2D() {
     if (ed.onChange) ed.onChange();
   } else {
     ed.setActive(false);
+    if (!_edPrevOrtho) activate3DView();                  // restaura la vista 3D si hi érem
+    if (selectedCloud && transformControls) {             // reenganxa el gizmo al núvol
+      transformControls.attach(selectedCloud);
+      transformControls.setMode(cloudTCMode);
+    }
     tools.style.display = 'none';
-    btn.textContent = '📐 Editor planta';
+    btn.textContent = '📐 Activar editor';
     btn.classList.remove('active');
   }
 }
@@ -4312,8 +3807,6 @@ try { init(); } catch(e) { console.error('init() crashed:', e); }
 try { setupUI(); } catch(e) { console.error('setupUI() crashed:', e); }
 try { initAccordions(); } catch(e) { console.error('initAccordions() crashed:', e); }
 try { initCmdLine(); } catch(e) { console.error('initCmdLine() crashed:', e); }
-try { initTracing(); } catch(e) { console.error('initTracing() crashed:', e); }
-try { initDrawOverlay(); } catch(e) { console.error('initDrawOverlay() crashed:', e); }
 try { initEditor2DUI(); } catch(e) { console.error('initEditor2DUI() crashed:', e); }
 animate();
 
