@@ -18,17 +18,7 @@
     /* ══════════════════════════════════════════
        LEFT PANEL
     ══════════════════════════════════════════ */
-    #controls {
-      position: absolute;
-      top: 0; left: 0; bottom: 0;
-      width: 280px;
-      z-index: 20;
-      background: #16181f;
-      border-right: 1px solid #2a2d40;
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-    }
+    /* #controls ara és la paleta "Núvol" (vegeu .palette-content) */
 
     #panelHeader {
       display: flex; align-items: center; justify-content: space-between;
@@ -221,8 +211,96 @@
        VIEWER
     ══════════════════════════════════════════ */
     #viewer {
-      position: absolute; top: 0; left: 280px; right: 0; bottom: 0;
+      position: absolute; top: 40px; left: 0; right: 0; bottom: 0;
     }
+
+    /* ── Barra superior d'accions globals ── */
+    #topBar {
+      position: absolute; top: 0; left: 0; right: 0; height: 40px; z-index: 40;
+      display: flex; align-items: center; gap: 8px; padding: 0 12px;
+      background: #14161d; border-bottom: 1px solid #2a2d40;
+    }
+    #tbLogo { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 700; color: #e07820; letter-spacing: .5px; }
+    #tbLogo #appVersion { font-size: 9px; color: #556; font-weight: 400; letter-spacing: 0; }
+    #topBar .tb-btn {
+      padding: 6px 12px; font-size: 11px; font-weight: 600; border-radius: 6px; cursor: pointer;
+      border: 1px solid #2a3145; background: #1a1f2c; color: #cde;
+    }
+    #topBar .tb-btn:hover { background: #232a3a; color: #fff; }
+    #tbMerge { background: #e07820 !important; color: #fff !important; border-color: #e07820 !important; }
+    #tbMerge:hover { background: #f08830 !important; }
+    #topBar .tb-spacer { flex: 1; }
+
+    /* Panell de diagnòstic */
+    #diagPanel {
+      position: absolute; top: 44px; right: 8px; width: 480px; max-width: 90vw; height: 60vh;
+      z-index: 45; display: none; flex-direction: column;
+      background: rgba(14,16,22,.98); border: 1px solid #2a3145; border-radius: 8px;
+      box-shadow: 0 8px 30px rgba(0,0,0,.6);
+    }
+    #diagPanel.open { display: flex; }
+    #diagHead {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 8px 12px; border-bottom: 1px solid #2a3145; font-size: 12px; color: #cde; font-weight: 600;
+    }
+    #diagHead button {
+      background: #1a1f2c; color: #cde; border: 1px solid #2a3145; border-radius: 5px;
+      padding: 4px 9px; font-size: 11px; cursor: pointer; margin-left: 5px;
+    }
+    #diagHead button:hover { background: #232a3a; color: #fff; }
+    #diagBody {
+      flex: 1; overflow: auto; margin: 0; padding: 10px 12px;
+      font-family: 'Cascadia Code','Consolas',monospace; font-size: 11px; line-height: 1.5;
+      color: #9fb0c0; white-space: pre-wrap; word-break: break-word;
+    }
+
+    /* ── Dock lateral (pestanyes de les paletes) ── */
+    #dock {
+      position: absolute; top: 40px; left: 0; bottom: 0; width: 32px; z-index: 36;
+      background: #101219; border-right: 1px solid #2a2d40;
+      display: flex; flex-direction: column;
+    }
+    .pal-tab {
+      writing-mode: vertical-rl; text-orientation: mixed;
+      padding: 14px 0; margin: 0; border: none; cursor: pointer;
+      background: transparent; color: #8899aa; font-size: 11px; font-weight: 700; letter-spacing: 1px;
+      border-bottom: 1px solid #1e2130;
+    }
+    .pal-tab:hover { color: #cde; background: #171a24; }
+    .pal-tab.active { color: #e07820; background: #171a24; box-shadow: inset -2px 0 0 #e07820; }
+
+    /* ── Contingut de les paletes (surt del dock) ── */
+    .palette-content {
+      position: absolute; top: 40px; left: 32px; bottom: 0; width: 280px; z-index: 35;
+      background: #16181f; border-right: 1px solid #2a2d40;
+      display: none; flex-direction: column; overflow: hidden;
+      box-shadow: 4px 0 16px rgba(0,0,0,.4);
+    }
+    .palette-content.open { display: flex; }
+    .popup-close {
+      position: absolute; top: 6px; right: 8px;
+      width: 22px; height: 22px; padding: 0;
+      background: rgba(0,0,0,.35); color: #99a;
+      border: 1px solid #2a3145; border-radius: 5px;
+      cursor: pointer; font-size: 12px; line-height: 1;
+      display: flex; align-items: center; justify-content: center;
+      pointer-events: auto; z-index: 6;
+    }
+    .popup-close:hover { background: #8b2020; color: #fff; border-color: #8b2020; }
+    .pal-title { padding: 10px 14px; font-size: 12px; font-weight: 700; color: #e07820; letter-spacing: .5px; border-bottom: 1px solid #2a2d40; flex-shrink: 0; }
+    .pal-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 8px 12px; }
+    .pal-scroll::-webkit-scrollbar { width: 4px; }
+    .pal-scroll::-webkit-scrollbar-thumb { background: #2a2d40; border-radius: 2px; }
+    .pal-scroll button {
+      display: block; width: 100%; margin: 3px 0; padding: 7px 10px;
+      font-size: 11px; font-weight: 500;
+      background: #1e2130; color: #aab;
+      border: 1px solid #252840; border-radius: 5px;
+      cursor: pointer; text-align: left; transition: background .15s;
+    }
+    .pal-scroll button:hover { background: #252840; color: #fff; }
+    .pal-scroll button.active { background: #3a1e08; border-color: #e07820; color: #f90; }
+    .pal-scroll .btn-orange { text-align: center; }
 
     /* Welcome screen */
     #welcomeScreen {
@@ -439,9 +517,40 @@
 <body>
 
   <!-- ═══════════════════════════════════════
-       LEFT CONTROL PANEL
+       BARRA SUPERIOR (accions globals)
   ═══════════════════════════════════════ -->
-  <div id="controls">
+  <div id="topBar">
+    <span id="tbLogo">&#9632; 4 Merge Cloud</span>
+    <button id="tbMerge" class="tb-btn">&#8859; Unir i descarregar</button>
+    <button id="tbSave" class="tb-btn">&#128190; Desar</button>
+    <button id="tbUndo" class="tb-btn">&#8617; Desfer últim</button>
+    <span class="tb-spacer"></span>
+    <button id="tbDiag" class="tb-btn" title="Registre de diagnòstic">&#128737; Diagnòstic</button>
+  </div>
+
+  <!-- Panell de diagnòstic (caixa negra) -->
+  <div id="diagPanel">
+    <div id="diagHead">
+      <span>&#128737; Diagnòstic — registre de la sessió</span>
+      <div>
+        <button id="diagCopy">&#128203; Copiar</button>
+        <button id="diagClear">&#128465; Netejar</button>
+        <button id="diagClose">&#10005;</button>
+      </div>
+    </div>
+    <pre id="diagBody"></pre>
+  </div>
+
+  <!-- Dock lateral amb les pestanyes de les paletes -->
+  <div id="dock">
+    <button id="tabCloud" class="pal-tab">N&Uacute;VOL</button>
+    <button id="tabDraw" class="pal-tab">DIBUIX</button>
+  </div>
+
+  <!-- ═══════════════════════════════════════
+       PALETA NÚVOL (eines de transformació)
+  ═══════════════════════════════════════ -->
+  <div id="controls" class="palette-content">
     <div id="panelHeader">
       <div id="panelLogo">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
@@ -642,63 +751,71 @@
       <button id="merge">&#8859; UNIR I DESCARREGAR XYZ</button>
       <button id="btnReset">REINICIAR TOT</button>
 
-      <!-- CAIXA D'EINES: EDITOR DE PLANTA (CAD) -->
-      <div class="acc" id="accCADbox" style="margin-top:8px;border-top:1px solid #2a2d40">
-        <div class="acc-header" data-acc="accCAD">
-          <span><span class="acc-icon">&#9645;</span>Editor de Planta (CAD)</span>
-          <span class="acc-arrow">&#9654;</span>
+    </div>
+  </div><!-- /controls (paleta Núvol) -->
+
+  <!-- ═══════════════════════════════════════
+       PALETA DIBUIX (editor CAD)
+  ═══════════════════════════════════════ -->
+  <div id="palDraw" class="palette-content">
+    <div class="pal-title">&#9645; EDITOR DE PLANTA (CAD)</div>
+    <div class="pal-scroll">
+      <button id="editorLaunchBtn" class="btn-orange">&#128208; Activar editor</button>
+      <div id="editorTools">
+        <div class="ed-modes">
+          <button id="edModeDraw" class="ed-mode active">&#9998; Parets</button>
+          <button id="edModePerim" class="ed-mode">&#9649; Perímetre</button>
         </div>
-        <div class="acc-body" id="accCAD-body">
-          <button id="editorLaunchBtn" class="btn-orange">&#128208; Activar editor</button>
-          <div id="editorTools">
-            <div class="ed-modes">
-              <button id="edModeDraw" class="ed-mode active">&#9998; Parets</button>
-              <button id="edModePerim" class="ed-mode">&#9649; Perímetre</button>
-            </div>
-            <div class="ed-modes">
-              <button id="edModeEdit" class="ed-mode">&#10021; Editar</button>
-              <button id="edModeErase" class="ed-mode">&#10005; Esborrar</button>
-              <button id="edModeThick" class="ed-mode">&#9645; Gruix</button>
-            </div>
-            <div class="ed-modes">
-              <button id="edModeEmpalme" class="ed-mode">&#8735; Empalme</button>
-              <button id="edModeExtend" class="ed-mode">&#8594;&#8614; Allargar</button>
-              <button id="edModeTrim" class="ed-mode">&#9986; Retallar</button>
-            </div>
-            <div class="ed-modes">
-              <button id="edModeOpening" class="ed-mode">&#9109; Portes / Finestres</button>
-            </div>
-            <div class="ed-modes" id="edOpTypeRow" style="display:none">
-              <button id="edOpDoor" class="ed-mode active">&#8991; Porta</button>
-              <button id="edOpWindow" class="ed-mode">&#9707; Finestra</button>
-            </div>
-            <div id="edOpInfo"></div>
-            <div id="edThickPanel">
-              <div id="edThickInfo">Selecciona una paret</div>
-              <div class="ed-thick-row">
-                <input id="edThickVal" type="number" step="0.01" min="0" placeholder="gruix (m)">
-                <button id="edThickApply">&#10003;</button>
-              </div>
-              <div class="ed-modes">
-                <button id="edSideCenter" class="ed-mode active">Centrat</button>
-                <button id="edSideA" class="ed-mode">Costat A</button>
-                <button id="edSideB" class="ed-mode">Costat B</button>
-              </div>
-              <button id="edThickMeasure">&#128207; Mesurar del núvol</button>
-              <button id="edThickAll">&#8862; Aplicar gruix a totes</button>
-            </div>
-            <button id="edHideCloud">&#128065; Núvol: 100%</button>
-            <div style="display:flex;gap:4px">
-              <button id="edUndo" style="flex:1">&#8617; Desfer</button>
-              <button id="edClear" style="flex:1">&#128465; Netejar</button>
-            </div>
-            <div id="edCount"></div>
-            <button id="edExport">&#8659; Exportar DXF</button>
+        <div class="ed-modes">
+          <button id="edModeEdit" class="ed-mode">&#10021; Editar</button>
+          <button id="edModeErase" class="ed-mode">&#10005; Esborrar</button>
+          <button id="edModeThick" class="ed-mode">&#9645; Gruix</button>
+        </div>
+        <div class="ed-modes">
+          <button id="edModeEmpalme" class="ed-mode">&#8735; Empalme</button>
+          <button id="edModeExtend" class="ed-mode">&#8594;&#8614; Allargar</button>
+          <button id="edModeTrim" class="ed-mode">&#9986; Retallar</button>
+        </div>
+        <div class="ed-modes">
+          <button id="edModeOpening" class="ed-mode">&#9109; Portes / Finestres</button>
+        </div>
+        <div class="ed-modes" id="edOpTypeRow" style="display:none">
+          <button id="edOpDoor" class="ed-mode active">&#8991; Porta</button>
+          <button id="edOpWindow" class="ed-mode">&#9707; Finestra</button>
+        </div>
+        <div class="ed-modes" id="edOpWidthRow" style="display:none">
+          <button id="edW60" class="ed-mode">60</button>
+          <button id="edW70" class="ed-mode">70</button>
+          <button id="edW80" class="ed-mode">80</button>
+          <button id="edW90" class="ed-mode">90</button>
+          <button id="edWDob" class="ed-mode">Doble</button>
+          <button id="edOpRotate" class="ed-mode" title="Girar porta">&#8635;</button>
+        </div>
+        <div id="edOpInfo"></div>
+        <div id="edThickPanel">
+          <div id="edThickInfo">Selecciona una paret</div>
+          <div class="ed-thick-row">
+            <input id="edThickVal" type="number" step="0.01" min="0" placeholder="gruix (m)">
+            <button id="edThickApply">&#10003;</button>
           </div>
+          <div class="ed-modes">
+            <button id="edSideCenter" class="ed-mode active">Centrat</button>
+            <button id="edSideA" class="ed-mode">Costat A</button>
+            <button id="edSideB" class="ed-mode">Costat B</button>
+          </div>
+          <button id="edThickMeasure">&#128207; Mesurar del núvol</button>
+          <button id="edThickAll">&#8862; Aplicar gruix a totes</button>
         </div>
+        <button id="edHideCloud">&#128065; Núvol: 100%</button>
+        <div style="display:flex;gap:4px">
+          <button id="edUndo" style="flex:1">&#8617; Desfer</button>
+          <button id="edClear" style="flex:1">&#128465; Netejar</button>
+        </div>
+        <div id="edCount"></div>
+        <button id="edExport">&#8659; Exportar DXF</button>
       </div>
     </div>
-  </div><!-- /controls -->
+  </div><!-- /palDraw -->
 
 
   <!-- ═══════════════════════════════════════
@@ -708,7 +825,8 @@
 
     <!-- Welcome screen -->
     <div id="welcomeScreen">
-      <div id="welcomeCard">
+      <div id="welcomeCard" style="position:relative">
+        <button class="popup-close" title="Tancar" onclick="document.getElementById('welcomeScreen').style.display='none'">&#10005;</button>
         <div id="welcomeBadge">
           <span>&#9679;</span> AS-BUILT 3D CAD SCANNER
         </div>
@@ -771,7 +889,8 @@
     </div>
 
     <!-- Branding (top right, hidden when stats panel visible) -->
-    <div id="branding">
+    <div id="branding" style="position:relative">
+      <button class="popup-close" title="Tancar" onclick="document.getElementById('branding').style.display='none'">&#10005;</button>
       <div id="brandingName"><span class="dot">&#9679;</span> 4 MERGE CLOUD</div>
       <div id="brandingSub">Visor i Editor 3D de Núvols de Punts</div>
     </div>
