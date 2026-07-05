@@ -5,17 +5,29 @@ import { TransformControls } from './jsm/controls/TransformControls.js';
 import { loadPLY, loadXYZ } from './loaders/pointcloud_loaders.js';
 
 // ── Versió i feature flags ────────────────────────────────────────────────────
-const APP_VERSION = '2.9.0';
+const APP_VERSION = '2.15.0';
 const FEATURES = {
   segmentacioSemantica: false,  // RANSAC + classificació per tipus
   completatBuits:       false,  // omplir forats basant-se en semàntica
   editorPlanta:         true,   // editor 2D estructurat (nodes + parets) → editor2d.js
 };
 
+// ── Diagnòstic ("caixa negra"): registre d'accions i errors per depurar ──
+const _diagLog = [];
+function diag(msg) {
+  const t = new Date().toTimeString().slice(0, 8);
+  const line = '[' + t + '] ' + msg;
+  _diagLog.push(line);
+  if (_diagLog.length > 500) _diagLog.shift();
+  try { console.log('◆ ' + line); } catch (_) {}
+}
+diag('app iniciada · v' + APP_VERSION);
+
 // ── Parsers OBJ i GLB ────────────────────────────────────────────────────────
 async function loadOBJ(file) {
   const text = await file.text();
   const positions = [], colors = [];
+  let colorMax = 0;
   for (const raw of text.split('\n')) {
     const p = raw.trim().split(/\s+/);
     if (p[0] !== 'v' || p.length < 4) continue;
@@ -23,14 +35,18 @@ async function loadOBJ(file) {
     if (p.length >= 7) {
       const r = parseFloat(p[4]), g = parseFloat(p[5]), b = parseFloat(p[6]);
       colors.push(isNaN(r)?1:r, isNaN(g)?1:g, isNaN(b)?1:b);
+      colorMax = Math.max(colorMax, r||0, g||0, b||0);
     }
   }
   if (positions.length === 0) throw new Error('Cap vèrtex trobat al fitxer OBJ');
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
-  const hasCol = colors.length === positions.length;
+  const hasCol = colors.length === positions.length && colors.length > 0;
+  const norm255 = hasCol && colorMax > 1.001;   // colors en rang 0-255 → normalitza a 0-1
+  if (norm255) for (let i = 0; i < colors.length; i++) colors[i] /= 255;
   if (hasCol) geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(colors), 3));
   const mat = new THREE.PointsMaterial({ size: 0.025, vertexColors: hasCol, color: hasCol ? 0xffffff : 0xcccccc });
+  console.log(`OBJ carregat: ${positions.length/3} punts · color: ${hasCol ? (norm255 ? 'sí (0-255→0-1)' : 'sí (0-1)') : 'NO trobat (v x y z r g b)'}`);
   const cloud = new THREE.Points(geo, mat);
   cloud.name = file.name;
   return cloud;
@@ -51,36 +67,69 @@ async function loadGLB(file) {
   }
   if (!jsonBuf) throw new Error('Chunk JSON no trobat al GLB');
   const gltf = JSON.parse(new TextDecoder().decode(jsonBuf));
+  const dvb = binBuf ? new DataView(binBuf) : null;
+
+  // Llegeix un accessor respectant byteStride (entrellaçat) i normalització
+  function readAccessor(idx) {
+    const acc = gltf.accessors[idx];
+    const bv  = gltf.bufferViews[acc.bufferView];
+    const comp = { SCALAR:1, VEC2:2, VEC3:3, VEC4:4 }[acc.type] || 3;
+    const ct = acc.componentType;
+    const bpe = ct === 5126 ? 4 : (ct === 5123 || ct === 5122) ? 2 : 1;
+    const stride = bv.byteStride || comp * bpe;
+    const base = (bv.byteOffset || 0) + (acc.byteOffset || 0);
+    const out = new Float32Array(acc.count * comp);
+    for (let i = 0; i < acc.count; i++) {
+      const eo = base + i * stride;
+      for (let c = 0; c < comp; c++) {
+        const o = eo + c * bpe;
+        let v;
+        if      (ct === 5126) v = dvb.getFloat32(o, true);
+        else if (ct === 5125) v = dvb.getUint32(o, true);
+        else if (ct === 5123) v = dvb.getUint16(o, true);
+        else if (ct === 5122) v = dvb.getInt16(o, true);
+        else if (ct === 5121) v = dvb.getUint8(o);
+        else                  v = dvb.getInt8(o);
+        if (acc.normalized) {
+          if      (ct === 5121) v /= 255;
+          else if (ct === 5123) v /= 65535;
+          else if (ct === 5120) v = Math.max(v / 127, -1);
+          else if (ct === 5122) v = Math.max(v / 32767, -1);
+        }
+        out[i * comp + c] = v;
+      }
+    }
+    return { data: out, comp, count: acc.count };
+  }
+
   const allPos = [], allCol = [];
+  let anyCol = false;
   for (const mesh of gltf.meshes || []) {
     for (const prim of mesh.primitives || []) {
-      const posAcc = gltf.accessors?.[prim.attributes?.POSITION];
-      if (!posAcc || !binBuf) continue;
-      const bv  = gltf.bufferViews[posAcc.bufferView];
-      const off = (bv.byteOffset || 0) + (posAcc.byteOffset || 0);
-      const arr = new Float32Array(binBuf.slice(off, off + posAcc.count * 12));
-      for (let i = 0; i < arr.length; i++) allPos.push(arr[i]);
-      const colAcc = gltf.accessors?.[prim.attributes?.COLOR_0];
-      if (colAcc) {
-        const cbv  = gltf.bufferViews[colAcc.bufferView];
-        const cOff = (cbv.byteOffset || 0) + (colAcc.byteOffset || 0);
-        const comp = colAcc.type === 'VEC4' ? 4 : 3;
-        const ct   = colAcc.componentType;
-        const bytes = ct === 5121 ? 1 : ct === 5123 ? 2 : 4;
-        const raw   = binBuf.slice(cOff, cOff + colAcc.count * comp * bytes);
-        const cArr  = ct === 5126 ? new Float32Array(raw) : ct === 5121 ? new Uint8Array(raw) : new Uint16Array(raw);
-        const scale = ct === 5126 ? 1 : ct === 5121 ? 255 : 65535;
-        for (let i = 0; i < colAcc.count; i++)
-          allCol.push(cArr[i*comp]/scale, cArr[i*comp+1]/scale, cArr[i*comp+2]/scale);
+      const posIdx = prim.attributes?.POSITION;
+      if (posIdx == null || !dvb) continue;
+      const pos = readAccessor(posIdx);
+      for (let i = 0; i < pos.count; i++) allPos.push(pos.data[i*pos.comp], pos.data[i*pos.comp+1], pos.data[i*pos.comp+2]);
+      const colIdx = prim.attributes?.COLOR_0;
+      if (colIdx != null) {
+        anyCol = true;
+        const col = readAccessor(colIdx);
+        // si els colors NO estan normalitzats però semblen 0-255, escala
+        let mx = 0; for (let k = 0; k < col.data.length; k++) mx = Math.max(mx, col.data[k]);
+        const div = mx > 1.001 ? 255 : 1;
+        for (let i = 0; i < pos.count; i++) allCol.push(col.data[i*col.comp]/div, col.data[i*col.comp+1]/div, col.data[i*col.comp+2]/div);
+      } else {
+        for (let i = 0; i < pos.count; i++) allCol.push(1, 1, 1);   // sense color → blanc (manté el compte)
       }
     }
   }
   if (allPos.length === 0) throw new Error('Cap geometria trobada al GLB');
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(allPos), 3));
-  const hasCol = allCol.length === allPos.length;
-  if (hasCol) geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(allCol), 3));
-  const mat = new THREE.PointsMaterial({ size: 0.025, vertexColors: hasCol, color: hasCol ? 0xffffff : 0xcccccc });
+  if (anyCol) geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(allCol), 3));
+  const mat = new THREE.PointsMaterial({ size: 0.025, vertexColors: anyCol, color: anyCol ? 0xffffff : 0xcccccc });
+  const hasTexture = !!(gltf.materials && gltf.materials.some(m => m.pbrMetallicRoughness?.baseColorTexture));
+  console.log(`GLB carregat: ${allPos.length/3} punts · COLOR_0: ${anyCol ? 'sí' : 'NO'}${!anyCol && hasTexture ? ' — el color sembla en una TEXTURA (no per punt), no es pot mostrar per vèrtex' : ''}`);
   const cloud = new THREE.Points(geo, mat);
   cloud.name = file.name;
   return cloud;
@@ -398,6 +447,14 @@ function syncClipBox(cloud) {
 
 function resetAll() {
   if (!confirm(T.resetConfirm)) return;
+  diag('REINICIAR TOT');
+
+  // Esborra també el dibuix de l'editor i el desat (perquè "reiniciar" netegi de veritat)
+  try {
+    if (_ed2d) { _ed2d.clear(); }
+    localStorage.removeItem('mc_editor_state');
+    if (_ed2dActive) toggleEditor2D();
+  } catch (e) { diag('reset editor error: ' + e.message); }
 
   clouds.forEach(cloud => {
     if (cloud.userData.clipBox) {
@@ -1932,6 +1989,7 @@ function setupUI() {
       for (const file of files) {
         const ext = file.name.split('.').pop().toLowerCase();
         let cloud = null;
+        diag('càrrega: ' + file.name + ' (' + ext + ', ' + Math.round(file.size/1024) + ' KB)');
         if (badge) badge.style.display = 'block';
         try {
           if      (ext === 'ply')                cloud = await loadPLY(file);
@@ -1941,6 +1999,7 @@ function setupUI() {
           else { alert(T.unsupported(ext)); continue; }
         } catch (err) {
           console.error('Error carregant núvol:', err);
+          diag('⚠ error càrrega ' + file.name + ': ' + err.message);
           alert(T.loadError(file.name, err.message));
           continue;
         } finally {
@@ -1956,6 +2015,7 @@ function setupUI() {
         onWindowResize();
         fitCameraToObject(cloud);
         updateRaycasterThreshold();
+        diag('carregat OK: ' + file.name + ' · ' + (cloud.geometry.attributes.position.count) + ' punts · total núvols: ' + clouds.length);
       }
     } finally {
       _loading = false;
@@ -3359,7 +3419,102 @@ async function _ensureEditor2D() {
     },
     getClouds:          () => clouds,
   });
+  // restaura el dibuix desat (si n'hi ha)
+  try { const s = localStorage.getItem('mc_editor_state'); if (s) _ed2d.setState(JSON.parse(s)); } catch (e) { console.warn('no s\'ha pogut restaurar el dibuix:', e); }
   return _ed2d;
+}
+
+// ── Barra superior + paletes auto-amagables (estil AutoCAD) ──
+function initTopUI() {
+  const pals = [
+    { tab: 'tabCloud', pal: 'controls' },
+    { tab: 'tabDraw',  pal: 'palDraw' },
+  ];
+  let closeTimer = null;
+  let pinned = null;
+  const setOpen = (palId) => {
+    pals.forEach(p => {
+      const on = p.pal === palId;
+      document.getElementById(p.pal)?.classList.toggle('open', on);
+      document.getElementById(p.tab)?.classList.toggle('active', on);
+    });
+  };
+  const closeAll = () => { if (pinned) return; setOpen(null); };
+  pals.forEach(p => {
+    const tab = document.getElementById(p.tab);
+    const pal = document.getElementById(p.pal);
+    if (!tab || !pal) return;
+    // Escriptori: obre en passar-hi el ratolí, tanca en sortir
+    tab.addEventListener('mouseenter', () => { clearTimeout(closeTimer); setOpen(p.pal); });
+    pal.addEventListener('mouseenter', () => clearTimeout(closeTimer));
+    pal.addEventListener('mouseleave', () => { closeTimer = setTimeout(closeAll, 350); });
+    tab.addEventListener('mouseleave', () => { closeTimer = setTimeout(closeAll, 350); });
+    // Tàctil / clic: la pestanya obre o tanca (fixa)
+    tab.addEventListener('click', (e) => {
+      e.stopPropagation();
+      clearTimeout(closeTimer);
+      if (pinned === p.pal) { pinned = null; setOpen(null); }
+      else { pinned = p.pal; setOpen(p.pal); }
+    });
+    pal.addEventListener('click', (e) => e.stopPropagation());
+  });
+  // Tocar fora de les paletes → tanca-les (útil a tàctil, sense hover)
+  document.addEventListener('click', () => { pinned = null; setOpen(null); });
+
+  // Barra superior — accions globals
+  document.getElementById('tbMerge')?.addEventListener('click', () => document.getElementById('merge')?.click());
+  document.getElementById('tbUndo')?.addEventListener('click', () => {
+    if (_ed2dActive && _ed2d) { _ed2d.undo(); }
+    else { doUndo(); }
+  });
+  document.getElementById('tbSave')?.addEventListener('click', async () => {
+    try {
+      const ed = await _ensureEditor2D();
+      localStorage.setItem('mc_editor_state', JSON.stringify(ed.getState()));
+      diag('DESAT (dibuix guardat al navegador)');
+      const b = document.getElementById('tbSave');
+      if (b) { const t = b.textContent; b.textContent = '✓ Desat'; setTimeout(() => { b.textContent = t; }, 1200); }
+    } catch (e) { diag('⚠ desar ha fallat: ' + e.message); }
+  });
+}
+
+// ── Panell de diagnòstic ──
+function _diagStateSummary() {
+  let ed = '—';
+  try { if (_ed2d) { const c = _ed2d.count(); ed = 'actiu:' + (_ed2dActive ? 'sí' : 'no') + ' · ' + c.walls + ' parets, ' + c.nodes + ' nodes, ' + c.openings + ' obertures'; } }
+  catch (_) {}
+  const pts = clouds.reduce((s, c) => s + (c.geometry?.attributes?.position?.count || 0), 0);
+  const saved = !!localStorage.getItem('mc_editor_state');
+  return [
+    '── ESTAT ──',
+    'versió: v' + APP_VERSION,
+    'núvols: ' + clouds.length + ' · punts totals: ' + pts.toLocaleString(),
+    'mode: ' + appMode + ' · vista: ' + (useOrtho ? 'ortogràfica' : '3D'),
+    'editor: ' + ed,
+    'dibuix desat al navegador: ' + (saved ? 'sí' : 'no'),
+    '── REGISTRE ──',
+  ].join('\n');
+}
+function _renderDiag() {
+  const body = document.getElementById('diagBody');
+  if (body) body.textContent = _diagStateSummary() + '\n' + _diagLog.join('\n');
+}
+function initDiagUI() {
+  const panel = document.getElementById('diagPanel');
+  document.getElementById('tbDiag')?.addEventListener('click', () => {
+    if (!panel) return;
+    const open = panel.classList.toggle('open');
+    if (open) _renderDiag();
+  });
+  document.getElementById('diagClose')?.addEventListener('click', () => panel?.classList.remove('open'));
+  document.getElementById('diagClear')?.addEventListener('click', () => { _diagLog.length = 0; diag('registre netejat'); _renderDiag(); });
+  document.getElementById('diagCopy')?.addEventListener('click', async () => {
+    const txt = _diagStateSummary() + '\n' + _diagLog.join('\n');
+    try { await navigator.clipboard.writeText(txt); }
+    catch (_) { const ta = document.createElement('textarea'); ta.value = txt; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); }
+    const b = document.getElementById('diagCopy');
+    if (b) { const t = b.textContent; b.textContent = '✓ Copiat'; setTimeout(() => { b.textContent = t; }, 1200); }
+  });
 }
 
 function _edSetModeBtn(m) {
@@ -3376,6 +3531,8 @@ function _edSetModeBtn(m) {
   if (tp) tp.style.display = (m === 'thickness') ? 'flex' : 'none';
   const otr = document.getElementById('edOpTypeRow');
   if (otr) otr.style.display = (m === 'opening') ? 'flex' : 'none';
+  const owr = document.getElementById('edOpWidthRow');
+  if (owr) owr.style.display = (m === 'opening') ? 'flex' : 'none';
   const oi = document.getElementById('edOpInfo');
   if (oi && !['empalme','extend','trim','opening'].includes(m)) oi.textContent = '';
 }
@@ -3406,6 +3563,12 @@ function _wireEditorButtons(ed) {
   document.getElementById('edModeOpening').onclick = () => { ed.setMode('opening'); _edSetModeBtn('opening'); };
   document.getElementById('edOpDoor').onclick   = () => { ed.setOpType('door'); document.getElementById('edOpDoor').classList.add('active'); document.getElementById('edOpWindow').classList.remove('active'); };
   document.getElementById('edOpWindow').onclick = () => { ed.setOpType('window'); document.getElementById('edOpWindow').classList.add('active'); document.getElementById('edOpDoor').classList.remove('active'); };
+  document.getElementById('edW60').onclick  = () => ed.setOpWidth(0.60);
+  document.getElementById('edW70').onclick  = () => ed.setOpWidth(0.70);
+  document.getElementById('edW80').onclick  = () => ed.setOpWidth(0.80);
+  document.getElementById('edW90').onclick  = () => ed.setOpWidth(0.90);
+  document.getElementById('edWDob').onclick = () => ed.setOpWidth(1.40);
+  document.getElementById('edOpRotate').onclick = () => ed.rotateOpening();
   ed.onOp = (msg) => { const oi = document.getElementById('edOpInfo'); if (oi) oi.textContent = msg; };
   document.getElementById('edThickApply').onclick   = () => ed.applyThickness(parseFloat(document.getElementById('edThickVal').value));
   document.getElementById('edThickMeasure').onclick = () => ed.startMeasure();
@@ -3434,6 +3597,7 @@ async function toggleEditor2D() {
   _wireEditorButtons(ed);
 
   _ed2dActive = !_ed2dActive;
+  diag('editor ' + (_ed2dActive ? 'ACTIVAT' : 'aturat'));
   const tools = document.getElementById('editorTools');
   const btn   = document.getElementById('editorLaunchBtn');
 
@@ -3787,6 +3951,7 @@ function animate() {
 // Arrencada
 // ─────────────────────────────────────────────
 window.addEventListener('error', e => {
+  diag('⚠ ERROR: ' + e.message + ' (' + (e.filename||'').split('/').pop() + ':' + e.lineno + ')');
   const box = document.getElementById('cmdHistory');
   if (box) {
     const d = document.createElement('div');
@@ -3798,6 +3963,9 @@ window.addEventListener('error', e => {
   const cl = document.getElementById('cmdLine');
   if (cl) cl.classList.remove('collapsed');
 });
+window.addEventListener('unhandledrejection', e => {
+  diag('⚠ PROMISE REBUTJADA: ' + ((e.reason && e.reason.message) || e.reason || 'desconegut'));
+});
 
 // Mostra versió a la capçalera
 const _vEl = document.getElementById('appVersion');
@@ -3808,6 +3976,8 @@ try { setupUI(); } catch(e) { console.error('setupUI() crashed:', e); }
 try { initAccordions(); } catch(e) { console.error('initAccordions() crashed:', e); }
 try { initCmdLine(); } catch(e) { console.error('initCmdLine() crashed:', e); }
 try { initEditor2DUI(); } catch(e) { console.error('initEditor2DUI() crashed:', e); }
+try { initTopUI(); } catch(e) { console.error('initTopUI() crashed:', e); }
+try { initDiagUI(); } catch(e) { console.error('initDiagUI() crashed:', e); }
 animate();
 
 // Obre els accordions "Propietats" i "Moure/Rotar" per defecte

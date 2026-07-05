@@ -39,6 +39,7 @@ export function createEditor2D(ctx) {
   let oid         = 1;
   let opType      = 'door';   // tipus per defecte en col·locar
   let opDrag      = null;     // {id, mode: 'slide'|'width'} mentre s'arrossega
+  let curOpening  = null;     // id de l'obertura actual (amplada/rotació s'hi apliquen)
   const OP_COL    = 0x00e0ff; // color de les obertures i mànecs
   const DEF_DOOR  = 0.80;     // amplada per defecte porta (m)
   const DEF_WIN   = 1.00;     // amplada per defecte finestra (m)
@@ -108,6 +109,69 @@ export function createEditor2D(ctx) {
     return [th / 2, -th / 2];
   }
 
+  // ── Unió de cantonades (mitra) ──
+  // paret veïna amb gruix que comparteix el node (només cantonades netes de 2 parets)
+  function adjacentWall(w, nodeId) {
+    const f = walls.filter(x => x !== w && x.type !== 'perimeter' && (x.thickness || 0) > 0 && (x.a === nodeId || x.b === nodeId));
+    return f.length === 1 ? f[0] : null;
+  }
+  // línia d'una cara (offset off al llarg de la normal)
+  function faceLine(w, off) {
+    const a = findNode(w.a), b = findNode(w.b);
+    const { n } = wallDirNormal(a, b);
+    return { p1: { x: a.x + n.x*off, z: a.z + n.z*off }, p2: { x: b.x + n.x*off, z: b.z + n.z*off } };
+  }
+  // direcció unitària des del node cap a l'altre extrem de la paret
+  function dirAway(w, nodeId) {
+    const P = findNode(nodeId);
+    const other = findNode(w.a === nodeId ? w.b : w.a);
+    const dx = other.x - P.x, dz = other.z - P.z;
+    const l = Math.hypot(dx, dz) || 1;
+    return { x: dx / l, z: dz / l };
+  }
+  // punt de la cara a l'extrem P: mitra amb la paret veïna, o el punt pla si no n'hi ha
+  function mitredPoint(w, P, off) {
+    const a = findNode(w.a), b = findNode(w.b);
+    const nW = wallDirNormal(a, b).n;
+    const base = { x: P.x + nW.x*off, z: P.z + nW.z*off };   // extrem de la cara de w a P
+    if (off === 0) return base;   // cara sobre l'eix: ja passa pel node
+    const w2 = adjacentWall(w, P.id);
+    if (!w2) return base;
+    const nW2 = wallDirNormal(findNode(w2.a), findNode(w2.b)).n;
+    const dW = dirAway(w, P.id), dW2 = dirAway(w2, P.id);
+    const sW = Math.sign(off);
+    // ¿la cara de w mira cap a l'interior de la cantonada (cap a l'altra paret)?
+    const wInner = (nW.x*sW*dW2.x + nW.z*sW*dW2.z) > 0;
+    const [oa, ob] = faceOffsets(w2.thickness || 0, w2.side || 0);
+    let matchOff = null;
+    for (const o of [oa, ob]) {
+      if (o === 0) continue;
+      const s2 = Math.sign(o);
+      const w2Inner = (nW2.x*s2*dW.x + nW2.z*s2*dW.z) > 0;
+      if (w2Inner !== wInner) { matchOff = o; break; }   // emparellament correcte (comprovat empíricament)
+    }
+    if (matchOff === null) return base;
+    const I = lineIntersect(faceLine(w, off).p1, faceLine(w, off).p2, faceLine(w2, matchOff).p1, faceLine(w2, matchOff).p2);
+    if (!I) return base;
+    const d = Math.hypot(I.x - base.x, I.z - base.z);
+    const maxD = 6 * Math.max(w.thickness || 0, w2.thickness || 0, 0.05);
+    return d <= maxD ? I : base;
+  }
+  // les dues cares d'una paret amb gruix, o null
+  // NOTA: unió de cantonades (mitra) pendent d'una revisió dedicada — ara cares planes
+  function wallFaces(w) {
+    const a = findNode(w.a), b = findNode(w.b);
+    if (!a || !b) return null;
+    const th = w.type === 'perimeter' ? 0 : (w.thickness || 0);
+    if (th <= 0) return null;
+    const { n } = wallDirNormal(a, b);
+    const [o1, o2] = faceOffsets(th, w.side || 0);
+    return {
+      f1: [{ x: a.x + n.x*o1, z: a.z + n.z*o1 }, { x: b.x + n.x*o1, z: b.z + n.z*o1 }],
+      f2: [{ x: a.x + n.x*o2, z: a.z + n.z*o2 }, { x: b.x + n.x*o2, z: b.z + n.z*o2 }],
+    };
+  }
+
   // geometria d'una obertura sobre la seva paret amfitriona (o null)
   function openingGeom(op) {
     const w = op.wall;
@@ -175,10 +239,11 @@ export function createEditor2D(ctx) {
       const A = new THREE.Vector3(a.x, a.y, a.z);
       const B = new THREE.Vector3(b.x, b.y, b.z);
       if (th > 0) {
-        const { n } = wallDirNormal(a, b);
-        const [o1, o2] = faceOffsets(th, w.side || 0);
-        addLine([new THREE.Vector3(a.x + n.x*o1, a.y, a.z + n.z*o1), new THREE.Vector3(b.x + n.x*o1, b.y, b.z + n.z*o1)], col);
-        addLine([new THREE.Vector3(a.x + n.x*o2, a.y, a.z + n.z*o2), new THREE.Vector3(b.x + n.x*o2, b.y, b.z + n.z*o2)], col);
+        const wy = a.y;
+        const F = wallFaces(w);
+        const P = (p) => new THREE.Vector3(p.x, wy, p.z);
+        addLine([P(F.f1[0]), P(F.f1[1])], col);
+        addLine([P(F.f2[0]), P(F.f2[1])], col);
         addLine([A, B], COL_AXIS, true);   // eix de referència
       } else {
         addLine([A, B], col);
@@ -202,13 +267,18 @@ export function createEditor2D(ctx) {
         addLine([V(e2, tk, n), V(e2, -tk, n)], OP_COL);
       }
       if (op.type === 'door') {
-        // fulla + arc de gir, frontissa a e1 sobre la cara o1
+        // fulla + arc de gir; op.rot (0-3) = costat de frontissa × sentit d'obertura
+        const rot = op.rot || 0;
+        const hingeE = (rot & 1) ? e2 : e1;
+        const otherE = (rot & 1) ? e1 : e2;
+        const faceOff = (rot & 2) ? o2 : o1;   // cara on seu la frontissa
+        const swing  = (rot & 2) ? -1 : 1;     // sentit del gir al llarg de la normal
         const leafLen = g.hw * 2;
-        const hinge = V(e1, o1, n);
-        const tip   = new THREE.Vector3(hinge.x + n.x*leafLen, y, hinge.z + n.z*leafLen);
+        const hinge = V(hingeE, faceOff, n);
+        const tip   = new THREE.Vector3(hinge.x + n.x*leafLen*swing, y, hinge.z + n.z*leafLen*swing);
         addLine([hinge, tip], OP_COL);
+        const other = V(otherE, faceOff, n);
         const arcPts = [];
-        const other = V(e2, o1, n);
         for (let i = 0; i <= 12; i++) {
           const ang = (i / 12) * (Math.PI / 2);
           const ca = Math.cos(ang), sa = Math.sin(ang);
@@ -397,17 +467,18 @@ export function createEditor2D(ctx) {
     if (mode === 'opening') {
       // agafa un mànec (centre = lliscar, extrem = amplada) o crea una obertura nova
       const h = openingHandleAt(cx, cy, SNAP_PX);
-      if (h) { opDrag = h; try { el().setPointerCapture(e.pointerId); } catch (_) {} return; }
+      if (h) { opDrag = h; curOpening = h.op.id; try { el().setPointerCapture(e.pointerId); } catch (_) {} return; }
       const w = wallAtScreen(cx, cy, WALL_PX);
       if (!w || w.type === 'perimeter') { emitOp('Clica sobre una paret per posar-hi una obertura'); return; }
       const world = ctx.screenToWorld(cx, cy);
       if (!world) return;
       const t = projectT(w, world);
-      const op = { id: oid++, wall: w, t, width: opType === 'door' ? DEF_DOOR : DEF_WIN, type: opType };
+      const op = { id: oid++, wall: w, t, width: opType === 'door' ? DEF_DOOR : DEF_WIN, type: opType, rot: 0 };
       openings.push(op);
+      curOpening = op.id;
       opDrag = { id: op.id, mode: 'width', op };
       rebuild(); changed();
-      emitOp((opType === 'door' ? 'Porta' : 'Finestra') + ' posada — arrossega el centre per moure-la, els extrems per l\'amplada');
+      emitOp((opType === 'door' ? 'Porta' : 'Finestra') + ' posada — arrossega o tria amplada / gira');
       return;
     }
 
@@ -629,8 +700,7 @@ export function createEditor2D(ctx) {
   }
 
   // ── DXF (parets → capa PARETS · perímetre → capa PERIMETRE) ───────────────
-  function exportDXF() {
-    if (walls.length === 0) { alert('No hi ha res per exportar. Dibuixa alguna paret o perímetre primer.'); return; }
+  function buildDXF() {
     const R = '\r\n';
     let dxf = '';
     dxf += '0'+R+'SECTION'+R+'2'+R+'HEADER'+R+'9'+R+'$ACADVER'+R+'1'+R+'AC1009'+R+'0'+R+'ENDSEC'+R;
@@ -649,12 +719,10 @@ export function createEditor2D(ctx) {
       const a = findNode(w.a), b = findNode(w.b);
       if (!a || !b) continue;
       if (w.type === 'perimeter') { lineDXF('PERIMETRE', a.x, a.z, b.x, b.z); continue; }
-      const th = w.thickness || 0;
-      if (th > 0) {
-        const { n } = wallDirNormal(a, b);
-        const [o1, o2] = faceOffsets(th, w.side || 0);
-        lineDXF('PARETS', a.x + n.x*o1, a.z + n.z*o1, b.x + n.x*o1, b.z + n.z*o1);   // cara 1
-        lineDXF('PARETS', a.x + n.x*o2, a.z + n.z*o2, b.x + n.x*o2, b.z + n.z*o2);   // cara 2
+      const F = wallFaces(w);
+      if (F) {
+        lineDXF('PARETS', F.f1[0].x, F.f1[0].z, F.f1[1].x, F.f1[1].z);   // cara 1 (unida)
+        lineDXF('PARETS', F.f2[0].x, F.f2[0].z, F.f2[1].x, F.f2[1].z);   // cara 2 (unida)
       } else {
         lineDXF('PARETS', a.x, a.z, b.x, b.z);   // eix
       }
@@ -675,6 +743,11 @@ export function createEditor2D(ctx) {
       }
     }
     dxf += '0'+R+'ENDSEC'+R+'0'+R+'EOF'+R;
+    return dxf;
+  }
+  function exportDXF() {
+    if (walls.length === 0) { alert('No hi ha res per exportar. Dibuixa alguna paret o perímetre primer.'); return; }
+    const dxf = buildDXF();
     const blob = new Blob([dxf], { type: 'application/dxf' });
     const url  = URL.createObjectURL(blob);
     const a2   = document.createElement('a');
@@ -718,6 +791,20 @@ export function createEditor2D(ctx) {
       if (m === 'opening') emitOp('Obertura (' + (opType === 'door' ? 'porta' : 'finestra') + '): clica sobre una paret');
     },
     setOpType(t) { opType = t; emitOp('Tipus: ' + (t === 'door' ? 'porta' : 'finestra') + ' — clica sobre una paret'); },
+    setOpWidth(w) {
+      const op = openings.find(o => o.id === curOpening);
+      if (!op) { emitOp('Posa o toca primer una obertura'); return; }
+      op.width = w;
+      rebuild(); changed();
+      emitOp('Amplada: ' + (w >= 1 ? (w === 1.4 ? 'doble' : w.toFixed(2) + ' m') : Math.round(w * 100) + ' cm'));
+    },
+    rotateOpening() {
+      const op = openings.find(o => o.id === curOpening);
+      if (!op) { emitOp('Posa o toca primer una obertura'); return; }
+      op.rot = ((op.rot || 0) + 1) % 4;
+      rebuild(); changed();
+      emitOp('Porta girada');
+    },
     undo() { const p = walls.pop(); if (p === selWall) selWall = null; rebuild(); changed(); },
     clear() { nodes = []; walls = []; nid = 1; openings = []; oid = 1; selWall = null; rebuild(); changed(); },
     cycleCloud() { cloudIdx = (cloudIdx + 1) % 3; applyCloud(); return ['100%', '35%', 'ocult'][cloudIdx]; },
@@ -752,7 +839,27 @@ export function createEditor2D(ctx) {
       emitThick('Clica la primera cara de la paret al núvol…');
     },
     exportDXF,
+    buildDXF,
     count() { return { nodes: nodes.length, walls: walls.length, openings: openings.length }; },
+    getState() {
+      return {
+        nodes: nodes.map(n => ({ id: n.id, x: n.x, y: n.y, z: n.z })),
+        walls: walls.map(w => ({ a: w.a, b: w.b, thickness: w.thickness || 0, side: w.side || 0, type: w.type || 'wall' })),
+        openings: openings.map(o => ({ wi: walls.indexOf(o.wall), t: o.t, width: o.width, type: o.type, rot: o.rot || 0 })).filter(o => o.wi >= 0),
+        planeY, nid,
+      };
+    },
+    setState(s) {
+      if (!s) return;
+      nodes = (s.nodes || []).map(n => ({ ...n }));
+      walls = (s.walls || []).map(w => ({ ...w }));
+      openings = (s.openings || []).filter(o => o.wi >= 0 && o.wi < walls.length)
+        .map(o => ({ id: oid++, wall: walls[o.wi], t: o.t, width: o.width, type: o.type, rot: o.rot || 0 }));
+      if (s.planeY != null) planeY = s.planeY;
+      nid = Math.max(nid, s.nid || 1);
+      selWall = null; opPick = null; opDrag = null;
+      rebuild(); changed();
+    },
   };
   return api;
 }
