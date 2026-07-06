@@ -1,0 +1,42 @@
+name: Deploy static site to GitHub Pages
+
+on:
+  # Desplega a cada push a main
+  push:
+    branches: [main]
+  # Permet disparar-lo manualment des de la pestanya Actions
+  workflow_dispatch:
+
+# Permisos necessaris perquè el deploy pugui publicar a Pages
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Un sol desplegament simultani; cancel·la runs en cua per evitar bloquejos
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          # Publica l'arrel del repo (lloc estàtic, sense build)
+          path: .
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
