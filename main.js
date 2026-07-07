@@ -5,7 +5,7 @@ import { TransformControls } from './jsm/controls/TransformControls.js';
 import { loadPLY, loadXYZ } from './loaders/pointcloud_loaders.js';
 
 // ── Versió i feature flags ────────────────────────────────────────────────────
-const APP_VERSION = '2.19.0';
+const APP_VERSION = '2.20.0';
 const FEATURES = {
   segmentacioSemantica: false,  // RANSAC + classificació per tipus
   completatBuits:       false,  // omplir forats basant-se en semàntica
@@ -3850,10 +3850,8 @@ function initTopUI() {
     { tab: 'tabCloud', pal: 'controls' },
     { tab: 'tabDraw',  pal: 'palDraw' },
   ];
-  // Els menús laterals romanen VISIBLES fins que l'usuari els plega (no s'amaguen per hover).
-  let current = null; // id de la paleta oberta (o null si totes plegades)
-  const setOpen = (palId) => {
-    current = palId;
+  // Les pestanyes CANVIEN de mòdul (sempre n'hi ha un de visible dins la caixa).
+  const setModule = (palId) => {
     pals.forEach(p => {
       const on = p.pal === palId;
       document.getElementById(p.pal)?.classList.toggle('open', on);
@@ -3861,24 +3859,22 @@ function initTopUI() {
     });
   };
   pals.forEach(p => {
-    const tab = document.getElementById(p.tab);
-    const pal = document.getElementById(p.pal);
-    if (!tab || !pal) return;
-    // Clic a la pestanya: obre aquesta paleta, o la plega si ja és l'oberta
-    tab.addEventListener('click', (e) => {
-      e.stopPropagation();
-      setOpen(current === p.pal ? null : p.pal);
-    });
-    pal.addEventListener('click', (e) => e.stopPropagation());
+    document.getElementById(p.tab)?.addEventListener('click', () => setModule(p.pal));
   });
-  // Botó ◀ dins de cada paleta → la plega lateralment
-  document.querySelectorAll('.pal-collapse').forEach(btn => {
-    btn.addEventListener('click', (e) => { e.stopPropagation(); setOpen(null); });
-  });
-  // Per defecte, mostra la paleta NÚVOL perquè els menús siguin visibles a l'inici
-  setOpen('controls');
+  setModule('controls');   // per defecte es mostra el mòdul NÚVOL
+
+  // La caixa és fixa però es pot plegar/desplegar lateralment
+  const box = document.getElementById('sidebox');
+  const reopen = document.getElementById('sideReopen');
+  const setCollapsed = (c) => {
+    box?.classList.toggle('collapsed', c);
+    reopen?.classList.toggle('show', c);
+  };
+  document.getElementById('sideCollapse')?.addEventListener('click', () => setCollapsed(true));
+  reopen?.addEventListener('click', () => setCollapsed(false));
 
   // Barra superior — accions globals
+  document.getElementById('tbOpen')?.addEventListener('click', () => document.getElementById('fileInput')?.click());
   document.getElementById('tbMerge')?.addEventListener('click', () => mergeCloudsInScene());
   document.getElementById('tbDownload')?.addEventListener('click', () => document.getElementById('merge')?.click());
   document.getElementById('tbUndo')?.addEventListener('click', () => {

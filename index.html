@@ -256,29 +256,65 @@
       color: #9fb0c0; white-space: pre-wrap; word-break: break-word;
     }
 
-    /* ── Dock lateral (pestanyes de les paletes) ── */
-    #dock {
-      position: absolute; top: 40px; left: 0; bottom: 0; width: 32px; z-index: 36;
-      background: #101219; border-right: 1px solid #2a2d40;
-      display: flex; flex-direction: column;
+    /* ══════════════════════════════════════════
+       CAIXA LATERAL D'EINES (fixa, plegable, amb dos mòduls)
+    ══════════════════════════════════════════ */
+    #sidebox {
+      position: absolute; top: 40px; left: 0; bottom: 0; width: 300px; z-index: 36;
+      display: flex; flex-direction: column; overflow: hidden;
+      background: #14161d; border-right: 1px solid #262b38;
+      box-shadow: 4px 0 20px rgba(0,0,0,.35);
+      transition: transform .22s ease;
     }
-    .pal-tab {
-      writing-mode: vertical-rl; text-orientation: mixed;
-      padding: 14px 0; margin: 0; border: none; cursor: pointer;
-      background: transparent; color: #8899aa; font-size: 11px; font-weight: 700; letter-spacing: 1px;
-      border-bottom: 1px solid #1e2130;
-    }
-    .pal-tab:hover { color: #cde; background: #171a24; }
-    .pal-tab.active { color: #e07820; background: #171a24; box-shadow: inset -2px 0 0 #e07820; }
+    #sidebox.collapsed { transform: translateX(-101%); }
 
-    /* ── Contingut de les paletes (surt del dock) ── */
-    .palette-content {
-      position: absolute; top: 40px; left: 32px; bottom: 0; width: 280px; z-index: 35;
-      background: #16181f; border-right: 1px solid #2a2d40;
-      display: none; flex-direction: column; overflow: hidden;
-      box-shadow: 4px 0 16px rgba(0,0,0,.4);
+    /* Pestanyes de mòdul (a dalt) */
+    #sideTabs { display: flex; align-items: stretch; height: 46px; flex-shrink: 0; background: #101219; border-bottom: 1px solid #262b38; }
+    .side-tab {
+      flex: 1; border: none; background: transparent; cursor: pointer;
+      color: #8a93a6; font-size: 12px; font-weight: 700; letter-spacing: .8px;
+      display: flex; align-items: center; justify-content: center; gap: 7px;
+      border-bottom: 2px solid transparent; transition: color .15s, background .15s;
     }
-    .palette-content.open { display: flex; }
+    .side-tab svg { width: 15px; height: 15px; opacity: .8; }
+    .side-tab:hover { color: #cdd6e6; background: #171a24; }
+    .side-tab.active { color: #e07820; border-bottom-color: #e07820; background: #171a24; }
+    .side-tab.active svg { opacity: 1; }
+    #sideCollapse { width: 40px; flex-shrink: 0; border: none; border-left: 1px solid #262b38; background: transparent; color: #8a93a6; cursor: pointer; font-size: 13px; }
+    #sideCollapse:hover { background: #171a24; color: #e07820; }
+
+    /* Botó per tornar a mostrar la caixa quan està plegada */
+    #sideReopen {
+      position: absolute; top: 48px; left: 0; z-index: 35; display: none;
+      width: 24px; height: 46px; border: 1px solid #262b38; border-left: none;
+      border-radius: 0 8px 8px 0; background: #14161d; color: #e07820; cursor: pointer;
+      font-size: 12px; box-shadow: 3px 0 12px rgba(0,0,0,.35);
+    }
+    #sideReopen.show { display: block; }
+    #sideReopen:hover { background: #1c1f2a; }
+
+    /* Un mòdul (NÚVOL o DIBUIX) — comparteixen l'espai, només un visible */
+    .side-module { display: none; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
+    .side-module.open { display: flex; }
+    .mod-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 10px 12px; }
+    .mod-scroll::-webkit-scrollbar { width: 6px; }
+    .mod-scroll::-webkit-scrollbar-thumb { background: #2a3040; border-radius: 3px; }
+    .mod-sub { font-size: 9px; font-weight: 700; color: #566; letter-spacing: 1.2px; text-transform: uppercase; padding: 12px 4px 6px; }
+
+    /* Fila d'eina neta (icona + text) — estil unificat dels dos mòduls */
+    .tool-row {
+      display: flex; align-items: center; gap: 10px; width: 100%;
+      margin: 4px 0; padding: 10px 12px; text-align: left;
+      background: #1b1f29; color: #c4ccda; border: 1px solid #262b38; border-radius: 9px;
+      cursor: pointer; font-size: 12px; font-weight: 500; transition: background .13s, border-color .13s, color .13s;
+    }
+    .tool-row:hover { background: #222735; border-color: #333b4d; color: #eef2f8; }
+    .tool-row .ti { width: 17px; height: 17px; flex-shrink: 0; opacity: .85; display: inline-flex; align-items: center; justify-content: center; }
+    .tool-row.active { background: #3a2410; border-color: #e07820; color: #ffb066; }
+    .tool-row.active .ti { opacity: 1; }
+    .tool-grid { display: flex; gap: 6px; }
+    .tool-grid .tool-row { margin: 4px 0; justify-content: center; padding: 9px 6px; }
+
     .popup-close {
       position: absolute; top: 6px; right: 8px;
       width: 22px; height: 22px; padding: 0;
@@ -289,22 +325,12 @@
       pointer-events: auto; z-index: 6;
     }
     .popup-close:hover { background: #8b2020; color: #fff; border-color: #8b2020; }
-    .pal-title { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; font-size: 12px; font-weight: 700; color: #e07820; letter-spacing: .5px; border-bottom: 1px solid #2a2d40; flex-shrink: 0; }
-    .pal-collapse { width: 22px; height: 22px; padding: 0; background: #1a1d28; color: #99a; border: 1px solid #2a3145; border-radius: 5px; cursor: pointer; font-size: 11px; line-height: 1; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-    .pal-collapse:hover { background: #252a3a; color: #fff; border-color: #e07820; }
-    .pal-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 8px 12px; }
-    .pal-scroll::-webkit-scrollbar { width: 4px; }
-    .pal-scroll::-webkit-scrollbar-thumb { background: #2a2d40; border-radius: 2px; }
-    .pal-scroll button {
-      display: block; width: 100%; margin: 3px 0; padding: 7px 10px;
-      font-size: 11px; font-weight: 500;
-      background: #1e2130; color: #aab;
-      border: 1px solid #252840; border-radius: 5px;
-      cursor: pointer; text-align: left; transition: background .15s;
-    }
-    .pal-scroll button:hover { background: #252840; color: #fff; }
-    .pal-scroll button.active { background: #3a1e08; border-color: #e07820; color: #f90; }
-    .pal-scroll .btn-orange { text-align: center; }
+    /* Compat: contenidors antics reaprofitats dins la caixa */
+    .palette-content { display: none; }
+    .palette-content.open { display: flex; }
+    .pal-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 10px 12px; }
+    .pal-scroll::-webkit-scrollbar { width: 6px; }
+    .pal-scroll::-webkit-scrollbar-thumb { background: #2a3040; border-radius: 3px; }
 
     /* Welcome screen */
     #welcomeScreen {
@@ -516,6 +542,59 @@
     /* split divider compat */
     #splitDivider { display: none; }
     .hidden { display: none !important; }
+
+    /* ══════════════════════════════════════════
+       REDISSENY — estil net unificat dels dos mòduls
+    ══════════════════════════════════════════ */
+    #tbOpen.tb-primary { background: #202634; border-color: #37405420; }
+    #tbOpen.tb-primary:hover { background: #2a3242; }
+
+    /* Botons genèrics dins dels mòduls (base neta) */
+    .pal-scroll button, .mod-scroll .acc-body button {
+      display: block; width: 100%; margin: 5px 0; padding: 10px 12px;
+      font-size: 12px; font-weight: 500; text-align: left;
+      background: #1b1f29; color: #c4ccda;
+      border: 1px solid #262b38; border-radius: 9px;
+      cursor: pointer; transition: background .13s, border-color .13s, color .13s;
+    }
+    .pal-scroll button:hover, .mod-scroll .acc-body button:hover { background: #222735; border-color: #333b4d; color: #eef2f8; }
+    .pal-scroll .btn-orange { text-align: center; }
+
+    /* Modes del DIBUIX: un per fila (icona + text a l'esquerra) */
+    .ed-modes { display: flex; flex-direction: column; gap: 6px; }
+    .ed-modes.ed-row { flex-direction: row; }
+    .ed-mode {
+      display: flex !important; align-items: center; gap: 10px; width: 100%;
+      margin: 0 !important; padding: 10px 12px !important; text-align: left !important;
+      background: #1b1f29; color: #c4ccda; border: 1px solid #262b38; border-radius: 9px;
+      cursor: pointer; font-size: 12px; font-weight: 500;
+      transition: background .13s, border-color .13s, color .13s;
+    }
+    .ed-mode:hover { background: #222735; border-color: #333b4d; color: #eef2f8; }
+    .ed-modes.ed-row .ed-mode { flex: 1; justify-content: center; gap: 5px; padding: 8px 4px !important; }
+    .ed-mode.active { background: #3a2410 !important; border-color: #e07820 !important; color: #ffb066 !important; }
+
+    /* Accordions del NÚVOL com a targetes netes */
+    .acc { border: none !important; margin: 5px 0; }
+    .acc-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 11px 12px; cursor: pointer; border-radius: 9px;
+      font-size: 12px; font-weight: 600; color: #aeb7c6; letter-spacing: .2px;
+      background: #1b1f29; border: 1px solid #262b38; user-select: none;
+      transition: background .13s, color .13s;
+    }
+    .acc-header:hover { background: #222735; color: #eef2f8; }
+    .acc-header.open { color: #e07820; background: #221a12; border-color: #4a3016; border-radius: 9px 9px 0 0; }
+    .acc-arrow { font-size: 9px; opacity: .5; transition: transform .2s; }
+    .acc-header.open .acc-arrow { transform: rotate(90deg); opacity: 1; }
+    .acc-icon { margin-right: 9px; opacity: .8; }
+    .acc-body { padding: 8px 10px 10px; background: #15181f; border: 1px solid #262b38; border-top: none; border-radius: 0 0 9px 9px; }
+    .acc-body.open { display: block; }
+
+    /* Càrrega + llista de núvols dins del nou estil */
+    #loadArea { margin: 4px 0 10px; border-radius: 10px; }
+    .section-label { padding: 8px 4px 4px; }
+    #cloudListPanel { padding: 0; }
   </style>
 </head>
 <body>
@@ -532,12 +611,18 @@
         <rect x="9" y="9" width="6" height="6" rx="1.2" fill="#e07820" opacity="0.35"/>
       </svg>
       <span id="tbTitle">4 Merge Cloud</span>
+      <span id="appVersion"></span>
     </span>
+    <button id="tbOpen" class="tb-btn tb-primary" title="Obrir fitxers o una carpeta (XYZ/PLY/OBJ/GLB o un projecte .4mc)">&#128193; Obrir</button>
     <button id="tbMerge" class="tb-btn" title="Uneix tots els núvols carregats en un de sol dins l'escena (no descarrega)">&#8859; Unir</button>
     <button id="tbDownload" class="tb-btn" title="Descarrega el núvol (o núvols) actuals com a fitxer XYZ">&#8659; Descarregar</button>
     <button id="tbSave" class="tb-btn" title="Desa el projecte (núvols + dibuix) com a fitxer .4mc que pots arxivar i reobrir. La sessió també es manté sola en recarregar (F5).">&#128190; Desar projecte</button>
     <button id="tbUndo" class="tb-btn" title="Desfà l'última acció">&#8617; Desfer últim</button>
     <span class="tb-spacer"></span>
+    <div id="langToggle">
+      <button class="lang-btn" data-lang="ca">CAT</button>
+      <button class="lang-btn" data-lang="en">ENG</button>
+    </div>
     <button id="tbDiag" class="tb-btn" title="Registre de diagnòstic">&#128737; Diagnòstic</button>
   </div>
 
@@ -554,37 +639,25 @@
     <pre id="diagBody"></pre>
   </div>
 
-  <!-- Dock lateral amb les pestanyes de les paletes -->
-  <div id="dock">
-    <button id="tabCloud" class="pal-tab">N&Uacute;VOL</button>
-    <button id="tabDraw" class="pal-tab">DIBUIX</button>
-  </div>
-
   <!-- ═══════════════════════════════════════
-       PALETA NÚVOL (eines de transformació)
+       CAIXA LATERAL D'EINES — dos mòduls (NÚVOL / DIBUIX)
   ═══════════════════════════════════════ -->
-  <div id="controls" class="palette-content">
-    <div id="panelHeader">
-      <div id="panelLogo">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-          <rect x="1" y="1" width="6" height="6" rx="1" fill="#e07820"/>
-          <rect x="9" y="1" width="6" height="6" rx="1" fill="#e07820" opacity="0.6"/>
-          <rect x="1" y="9" width="6" height="6" rx="1" fill="#e07820" opacity="0.6"/>
-          <rect x="9" y="9" width="6" height="6" rx="1" fill="#e07820" opacity="0.3"/>
-        </svg>
-        4MC Control Panel
-        <span id="appVersion" style="font-size:9px;color:#334;margin-left:6px;font-weight:400;letter-spacing:0"></span>
-      </div>
-      <div style="display:flex;align-items:center;gap:6px">
-        <div id="langToggle">
-          <button class="lang-btn" data-lang="ca">CAT</button>
-          <button class="lang-btn" data-lang="en">ENG</button>
-        </div>
-        <button class="pal-collapse" title="Plegar menú">&#9664;</button>
-      </div>
+  <div id="sidebox">
+    <div id="sideTabs">
+      <button id="tabCloud" class="side-tab active">
+        <svg viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="1" width="6" height="6" rx="1.2"/><rect x="9" y="1" width="6" height="6" rx="1.2" opacity=".6"/><rect x="1" y="9" width="6" height="6" rx="1.2" opacity=".6"/><rect x="9" y="9" width="6" height="6" rx="1.2" opacity=".35"/></svg>
+        NÚVOL
+      </button>
+      <button id="tabDraw" class="side-tab">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 13.5l1-3 7-7 2 2-7 7-3 1z"/></svg>
+        DIBUIX
+      </button>
+      <button id="sideCollapse" title="Amagar el panell">&#9664;</button>
     </div>
 
-    <div id="panelScroll">
+    <!-- MÒDUL 1: NÚVOL (eines del núvol de punts) -->
+    <div id="controls" class="side-module open">
+      <div id="panelScroll" class="mod-scroll">
       <!-- Load -->
       <div id="loadArea">
         <label for="fileInput" style="cursor:pointer;display:block">
@@ -772,16 +845,12 @@
       <button id="mergeScene" class="btn-blue">&#8859; UNIR NÚVOLS (a l'escena)</button>
       <button id="merge">&#8659; DESCARREGAR XYZ</button>
       <button id="btnReset">REINICIAR TOT</button>
-
     </div>
-  </div><!-- /controls (paleta Núvol) -->
+    </div><!-- /controls (mòdul NÚVOL) -->
 
-  <!-- ═══════════════════════════════════════
-       PALETA DIBUIX (editor CAD)
-  ═══════════════════════════════════════ -->
-  <div id="palDraw" class="palette-content">
-    <div class="pal-title"><span>&#9645; EDITOR DE PLANTA (CAD)</span><button class="pal-collapse" title="Plegar menú">&#9664;</button></div>
-    <div class="pal-scroll">
+    <!-- MÒDUL 2: DIBUIX (editor CAD) -->
+    <div id="palDraw" class="side-module">
+      <div class="pal-scroll mod-scroll">
       <button id="editorLaunchBtn" class="btn-orange">&#128208; Activar editor</button>
       <div id="editorTools">
         <div class="ed-modes">
@@ -802,7 +871,7 @@
             <input id="edSelThickVal" type="number" step="0.01" min="0" placeholder="gruix (m)">
             <button id="edSelThickApply">&#9645; Gruix</button>
           </div>
-          <div class="ed-modes">
+          <div class="ed-modes ed-row">
             <button id="edSelSideCenter" class="ed-mode active">Centrat</button>
             <button id="edSelSideA" class="ed-mode">Costat A</button>
             <button id="edSelSideB" class="ed-mode">Costat B</button>
@@ -817,11 +886,11 @@
         <div class="ed-modes">
           <button id="edModeOpening" class="ed-mode">&#9109; Portes / Finestres</button>
         </div>
-        <div class="ed-modes" id="edOpTypeRow" style="display:none">
+        <div class="ed-modes ed-row" id="edOpTypeRow" style="display:none">
           <button id="edOpDoor" class="ed-mode active">&#8991; Porta</button>
           <button id="edOpWindow" class="ed-mode">&#9707; Finestra</button>
         </div>
-        <div class="ed-modes" id="edOpWidthRow" style="display:none">
+        <div class="ed-modes ed-row" id="edOpWidthRow" style="display:none">
           <button id="edW60" class="ed-mode">60</button>
           <button id="edW70" class="ed-mode">70</button>
           <button id="edW80" class="ed-mode">80</button>
@@ -836,7 +905,7 @@
             <input id="edThickVal" type="number" step="0.01" min="0" placeholder="gruix (m)">
             <button id="edThickApply">&#10003;</button>
           </div>
-          <div class="ed-modes">
+          <div class="ed-modes ed-row">
             <button id="edSideCenter" class="ed-mode active">Centrat</button>
             <button id="edSideA" class="ed-mode">Costat A</button>
             <button id="edSideB" class="ed-mode">Costat B</button>
@@ -853,7 +922,9 @@
         <button id="edExport">&#8659; Exportar DXF</button>
       </div>
     </div>
-  </div><!-- /palDraw -->
+    </div><!-- /palDraw (mòdul DIBUIX) -->
+  </div><!-- /sidebox -->
+  <button id="sideReopen" title="Mostrar el panell d'eines">&#9654;</button>
 
 
   <!-- ═══════════════════════════════════════
