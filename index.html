@@ -225,12 +225,11 @@
     #tbTitle { font-size: 17px; font-weight: 700; color: #e07820; letter-spacing: .3px; white-space: nowrap; }
     #tbLogo #appVersion { font-size: 9px; color: #556; font-weight: 400; letter-spacing: 0; }
     #topBar .tb-btn {
-      padding: 6px 12px; font-size: 11px; font-weight: 600; border-radius: 6px; cursor: pointer;
-      border: 1px solid #2a3145; background: #1a1f2c; color: #cde;
+      padding: 7px 15px; font-size: 13px; font-weight: 600; border-radius: 7px; cursor: pointer;
+      border: 1px solid #2a3145; background: #1a1f2c; color: #d6deea; letter-spacing: .2px;
+      transition: background .13s, color .13s, border-color .13s;
     }
-    #topBar .tb-btn:hover { background: #232a3a; color: #fff; }
-    #tbMerge { background: #e07820 !important; color: #fff !important; border-color: #e07820 !important; }
-    #tbMerge:hover { background: #f08830 !important; }
+    #topBar .tb-btn:hover { background: #e07820; color: #fff; border-color: #e07820; }
     #topBar .tb-spacer { flex: 1; }
 
     /* Panell de diagnòstic */
@@ -533,8 +532,11 @@
     /* Branding */
     #branding {
       position: absolute; top: 10px; right: 52px;
-      text-align: right; z-index: 15; pointer-events: none; display: block;
+      z-index: 15; pointer-events: none;
+      display: flex; align-items: center; gap: 8px;
     }
+    #branding .popup-close { position: static; }
+    #brandingText { text-align: right; }
     #brandingName { font-size: 13px; font-weight: 700; color: #dde; letter-spacing: 0.3px; }
     #brandingName .dot { color: #e07820; }
     #brandingSub { font-size: 9px; color: #334; letter-spacing: 0.5px; margin-top: 1px; }
@@ -546,9 +548,6 @@
     /* ══════════════════════════════════════════
        REDISSENY — estil net unificat dels dos mòduls
     ══════════════════════════════════════════ */
-    #tbOpen.tb-primary { background: #202634; border-color: #37405420; }
-    #tbOpen.tb-primary:hover { background: #2a3242; }
-
     /* Botons genèrics dins dels mòduls (base neta) */
     .pal-scroll button, .mod-scroll .acc-body button {
       display: block; width: 100%; margin: 5px 0; padding: 10px 12px;
@@ -613,17 +612,17 @@
       <span id="tbTitle">4 Merge Cloud</span>
       <span id="appVersion"></span>
     </span>
-    <button id="tbOpen" class="tb-btn tb-primary" title="Obrir fitxers o una carpeta (XYZ/PLY/OBJ/GLB o un projecte .4mc)">&#128193; Obrir</button>
-    <button id="tbMerge" class="tb-btn" title="Uneix tots els núvols carregats en un de sol dins l'escena (no descarrega)">&#8859; Unir</button>
-    <button id="tbDownload" class="tb-btn" title="Descarrega el núvol (o núvols) actuals com a fitxer XYZ">&#8659; Descarregar</button>
-    <button id="tbSave" class="tb-btn" title="Desa el projecte (núvols + dibuix) com a fitxer .4mc que pots arxivar i reobrir. La sessió també es manté sola en recarregar (F5).">&#128190; Desar projecte</button>
-    <button id="tbUndo" class="tb-btn" title="Desfà l'última acció">&#8617; Desfer últim</button>
+    <button id="tbOpen" class="tb-btn" title="Obrir fitxers o una carpeta (XYZ/PLY/OBJ/GLB o un projecte .4mc)">Obrir</button>
+    <button id="tbMerge" class="tb-btn" title="Uneix tots els núvols carregats en un de sol dins l'escena (no descarrega)">Unir</button>
+    <button id="tbDownload" class="tb-btn" title="Descarrega el núvol (o núvols) actuals com a fitxer XYZ">Descarregar</button>
+    <button id="tbSave" class="tb-btn" title="Desa el projecte (núvols + dibuix) com a fitxer .4mc que pots arxivar i reobrir. La sessió també es manté sola en recarregar (F5).">Desar projecte</button>
+    <button id="tbUndo" class="tb-btn" title="Desfà l'última acció">Desfer últim</button>
     <span class="tb-spacer"></span>
     <div id="langToggle">
       <button class="lang-btn" data-lang="ca">CAT</button>
       <button class="lang-btn" data-lang="en">ENG</button>
     </div>
-    <button id="tbDiag" class="tb-btn" title="Registre de diagnòstic">&#128737; Diagnòstic</button>
+    <button id="tbDiag" class="tb-btn" title="Registre de diagnòstic">Diagnòstic</button>
   </div>
 
   <!-- Panell de diagnòstic (caixa negra) -->
@@ -851,7 +850,7 @@
     <!-- MÒDUL 2: DIBUIX (editor CAD) -->
     <div id="palDraw" class="side-module">
       <div class="pal-scroll mod-scroll">
-      <button id="editorLaunchBtn" class="btn-orange">&#128208; Activar editor</button>
+      <button id="editorLaunchBtn" class="btn-orange" style="display:none">&#128208; Activar editor</button>
       <div id="editorTools">
         <div class="ed-modes">
           <button id="edModeDraw" class="ed-mode active">&#9998; Parets</button>
@@ -998,10 +997,12 @@
     </div>
 
     <!-- Branding (top right, hidden when stats panel visible) -->
-    <div id="branding" style="position:relative">
+    <div id="branding">
       <button class="popup-close" title="Tancar" onclick="document.getElementById('branding').style.display='none'">&#10005;</button>
-      <div id="brandingName"><span class="dot">&#9679;</span> 4 MERGE CLOUD</div>
-      <div id="brandingSub">Visor i Editor 3D de Núvols de Punts</div>
+      <div id="brandingText">
+        <div id="brandingName"><span class="dot">&#9679;</span> 4 MERGE CLOUD</div>
+        <div id="brandingSub">Visor i Editor 3D de Núvols de Punts</div>
+      </div>
     </div>
 
     <!-- View toolbar (right side) -->

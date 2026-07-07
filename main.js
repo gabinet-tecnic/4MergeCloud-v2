@@ -3857,6 +3857,9 @@ function initTopUI() {
       document.getElementById(p.pal)?.classList.toggle('open', on);
       document.getElementById(p.tab)?.classList.toggle('active', on);
     });
+    // Entrar al mòdul DIBUIX activa l'editor i desplega les eines; sortir-ne el desactiva.
+    if (palId === 'palDraw') { if (!_ed2dActive) toggleEditor2D(); }
+    else { if (_ed2dActive) toggleEditor2D(); }
   };
   pals.forEach(p => {
     document.getElementById(p.tab)?.addEventListener('click', () => setModule(p.pal));
