@@ -535,7 +535,7 @@
     </span>
     <button id="tbMerge" class="tb-btn" title="Uneix tots els núvols carregats en un de sol dins l'escena (no descarrega)">&#8859; Unir</button>
     <button id="tbDownload" class="tb-btn" title="Descarrega el núvol (o núvols) actuals com a fitxer XYZ">&#8659; Descarregar</button>
-    <button id="tbSave" class="tb-btn" title="Desa el dibuix CAD (parets, obertures, gruixos) al navegador; es recupera en recarregar">&#128190; Desar</button>
+    <button id="tbSave" class="tb-btn" title="Desa el projecte (núvols + dibuix) com a fitxer .4mc que pots arxivar i reobrir. La sessió també es manté sola en recarregar (F5).">&#128190; Desar projecte</button>
     <button id="tbUndo" class="tb-btn" title="Desfà l'última acció">&#8617; Desfer últim</button>
     <span class="tb-spacer"></span>
     <button id="tbDiag" class="tb-btn" title="Registre de diagnòstic">&#128737; Diagnòstic</button>
@@ -592,10 +592,15 @@
             <path d="M14 4v14M8 10l6-6 6 6"/>
             <rect x="3" y="18" width="22" height="6" rx="2" stroke-opacity="0.4"/>
           </svg>
-          <div class="load-title">Carregar Fitxer (XYZ/PLY)</div>
-          <div class="load-sub">ARROSSEGA I DEIXA ELS FITXERS AQUÍ</div>
+          <div class="load-title">Carregar Fitxer (XYZ/PLY/OBJ/GLB)</div>
+          <div class="load-sub">ARROSSEGA FITXERS O UNA CARPETA AQUÍ</div>
         </label>
-        <input type="file" id="fileInput" multiple accept=".xyz,.ply,.txt,.obj,.glb,.gltf,text/plain,application/octet-stream,model/gltf-binary,model/obj">
+        <input type="file" id="fileInput" multiple accept=".xyz,.ply,.txt,.obj,.glb,.gltf,.4mc,text/plain,application/octet-stream,model/gltf-binary,model/obj">
+        <input type="file" id="dirInput" webkitdirectory directory style="display:none">
+        <div style="margin-top:8px;font-size:10px;color:#667;text-align:center;line-height:1.5">
+          OBJ amb textura? <label for="dirInput" style="color:#e07820;cursor:pointer;text-decoration:underline">Carrega la carpeta sencera</label>
+          <br>(obj + mtl + textures) per veure'n el color
+        </div>
       </div>
 
       <!-- Clouds -->

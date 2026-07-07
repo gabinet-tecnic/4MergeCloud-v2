@@ -5,7 +5,7 @@ import { TransformControls } from './jsm/controls/TransformControls.js';
 import { loadPLY, loadXYZ } from './loaders/pointcloud_loaders.js';
 
 // ── Versió i feature flags ────────────────────────────────────────────────────
-const APP_VERSION = '2.17.0';
+const APP_VERSION = '2.19.0';
 const FEATURES = {
   segmentacioSemantica: false,  // RANSAC + classificació per tipus
   completatBuits:       false,  // omplir forats basant-se en semàntica
@@ -24,29 +24,117 @@ function diag(msg) {
 diag('app iniciada · v' + APP_VERSION);
 
 // ── Parsers OBJ i GLB ────────────────────────────────────────────────────────
-async function loadOBJ(file) {
+// ── Helpers d'imatge/textura (compartits per OBJ i textures externes) ──
+async function _decodeImageFile(file) {
+  try {
+    const bmp = await createImageBitmap(file);
+    const cv = document.createElement('canvas'); cv.width = bmp.width; cv.height = bmp.height;
+    const c2 = cv.getContext('2d', { willReadFrequently: true }); c2.drawImage(bmp, 0, 0);
+    const id = c2.getImageData(0, 0, cv.width, cv.height);
+    bmp.close?.();
+    return id;
+  } catch (_) { return null; }
+}
+function _sampleImageData(id, u, v) {
+  let x = Math.floor((u - Math.floor(u)) * id.width);
+  let y = Math.floor((1 - (v - Math.floor(v))) * id.height);   // V invertida (convenció OBJ/glTF)
+  x = Math.min(Math.max(x, 0), id.width - 1);
+  y = Math.min(Math.max(y, 0), id.height - 1);
+  const o = (y * id.width + x) * 4;
+  return [id.data[o] / 255, id.data[o + 1] / 255, id.data[o + 2] / 255];
+}
+// busca un fitxer company pel camí (relatiu o base), tolerant a barres i carpetes
+function _findCompanion(path, companions) {
+  if (!path || !companions) return null;
+  const p = path.replace(/\\/g, '/').toLowerCase();
+  if (companions.has(p)) return companions.get(p);
+  const base = p.split('/').pop();
+  if (companions.has(base)) return companions.get(base);
+  for (const [k, v] of companions) if (k === base || k.endsWith('/' + base)) return v;
+  return null;
+}
+// resol la textura map_Kd d'un .mtl → ImageData (o null)
+async function _resolveOBJTexture(mtlName, companions) {
+  const mtlFile = _findCompanion(mtlName, companions);
+  if (!mtlFile) return { id: null, reason: 'falta el .mtl' };
+  const mtlText = await mtlFile.text();
+  const mapLine = mtlText.split('\n').map(l => l.trim()).find(l => /^map_Kd\b/i.test(l));
+  if (!mapLine) return { id: null, reason: 'el .mtl no té map_Kd' };
+  const toks = mapLine.split(/\s+/);
+  const texPath = toks[toks.length - 1];   // últim token (map_Kd pot dur opcions -o -s…)
+  const texFile = _findCompanion(texPath, companions);
+  if (!texFile) return { id: null, reason: 'falta la imatge ' + texPath };
+  const id = await _decodeImageFile(texFile);
+  return { id, reason: id ? null : 'no s\'ha pogut descodificar la imatge' };
+}
+
+async function loadOBJ(file, companions) {
   const text = await file.text();
-  const positions = [], colors = [];
-  let colorMax = 0;
-  for (const raw of text.split('\n')) {
+  const positions = [], colors = [], vt = [];
+  const vertexUV = [];        // vertexUV[i] = índex (0-based) dins vt per al vèrtex i
+  let colorMax = 0, mtlName = null;
+  const lines = text.split('\n');
+  for (let li = 0; li < lines.length; li++) {
+    const raw = lines[li];
+    if (raw.length < 2) continue;
     const p = raw.trim().split(/\s+/);
-    if (p[0] !== 'v' || p.length < 4) continue;
-    positions.push(parseFloat(p[1]), parseFloat(p[2]), parseFloat(p[3]));
-    if (p.length >= 7) {
-      const r = parseFloat(p[4]), g = parseFloat(p[5]), b = parseFloat(p[6]);
-      colors.push(isNaN(r)?1:r, isNaN(g)?1:g, isNaN(b)?1:b);
-      colorMax = Math.max(colorMax, r||0, g||0, b||0);
+    const k = p[0];
+    if (k === 'v') {
+      positions.push(parseFloat(p[1]), parseFloat(p[2]), parseFloat(p[3]));
+      if (p.length >= 7) {   // extensió color per vèrtex: v x y z r g b
+        const r = parseFloat(p[4]), g = parseFloat(p[5]), b = parseFloat(p[6]);
+        colors.push(isNaN(r)?1:r, isNaN(g)?1:g, isNaN(b)?1:b);
+        colorMax = Math.max(colorMax, r||0, g||0, b||0);
+      }
+    } else if (k === 'vt') {
+      vt.push(parseFloat(p[1]), parseFloat(p[2]));
+    } else if (k === 'f') {
+      const nV = positions.length / 3, nT = vt.length / 2;
+      for (let c = 1; c < p.length; c++) {
+        const seg = p[c].split('/');
+        let vi = parseInt(seg[0]); if (isNaN(vi)) continue;
+        vi = vi > 0 ? vi - 1 : nV + vi;
+        if (seg[1]) {
+          let ti = parseInt(seg[1]);
+          if (!isNaN(ti)) { ti = ti > 0 ? ti - 1 : nT + ti; if (vertexUV[vi] === undefined) vertexUV[vi] = ti; }
+        }
+      }
+    } else if (k === 'mtllib') {
+      mtlName = p.slice(1).join(' ');
     }
   }
   if (positions.length === 0) throw new Error('Cap vèrtex trobat al fitxer OBJ');
+  const nVerts = positions.length / 3;
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
-  const hasCol = colors.length === positions.length && colors.length > 0;
-  const norm255 = hasCol && colorMax > 1.001;   // colors en rang 0-255 → normalitza a 0-1
-  if (norm255) for (let i = 0; i < colors.length; i++) colors[i] /= 255;
-  if (hasCol) geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(colors), 3));
+
+  let hasCol = colors.length === positions.length && colors.length > 0;
+  let colSrc = 'NO', note = '';
+  if (hasCol) {
+    const norm255 = colorMax > 1.001;
+    if (norm255) for (let i = 0; i < colors.length; i++) colors[i] /= 255;
+    geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(colors), 3));
+    colSrc = norm255 ? 'per vèrtex (0-255→0-1)' : 'per vèrtex';
+  } else if (mtlName) {
+    // Color en TEXTURA (map_Kd): mostreja la imatge a la UV de cada vèrtex
+    const { id, reason } = await _resolveOBJTexture(mtlName, companions);
+    if (id && vt.length) {
+      const out = new Float32Array(nVerts * 3);
+      let any = false;
+      for (let i = 0; i < nVerts; i++) {
+        const ti = vertexUV[i];
+        if (ti === undefined) { out[i*3] = out[i*3+1] = out[i*3+2] = 1; continue; }
+        const c = _sampleImageData(id, vt[ti*2], vt[ti*2+1]);
+        out[i*3] = c[0]; out[i*3+1] = c[1]; out[i*3+2] = c[2]; any = true;
+      }
+      if (any) { geo.setAttribute('color', new THREE.BufferAttribute(out, 3)); hasCol = true; colSrc = 'mostrejat de textura'; }
+    } else {
+      note = ' — té textura al .mtl però ' + (reason || 'no s\'ha pogut carregar') + '. Arrossega la CARPETA sencera (obj + mtl + textures) per veure el color.';
+    }
+  }
   const mat = new THREE.PointsMaterial({ size: 0.025, vertexColors: hasCol, color: hasCol ? 0xffffff : 0xcccccc });
-  console.log(`OBJ carregat: ${positions.length/3} punts · color: ${hasCol ? (norm255 ? 'sí (0-255→0-1)' : 'sí (0-1)') : 'NO trobat (v x y z r g b)'}`);
+  console.log(`OBJ carregat: ${nVerts} punts · color: ${colSrc}${note}`);
+  diag('OBJ ' + file.name + ': ' + nVerts + ' punts · color: ' + colSrc + note);
   const cloud = new THREE.Points(geo, mat);
   cloud.name = file.name;
   return cloud;
@@ -561,6 +649,7 @@ function resetAll() {
   updateCloudList();
   updateUndoBtn();
   updateMeasureList();
+  persistSession(true);   // esborra també la sessió auto-desada
 }
 
 // ─────────────────────────────────────────────
@@ -2047,12 +2136,35 @@ function setupUI() {
   fileInput.value = '';
   let _loading = false;
 
-  async function handleFiles(files) {
-    if (_loading || !files || files.length === 0) return;
+  const CLOUD_EXTS = ['ply', 'xyz', 'txt', 'obj', 'glb', 'gltf'];
+
+  async function handleFiles(fileList) {
+    if (_loading || !fileList) return;
+    const files = Array.from(fileList);
+    if (files.length === 0) return;
     _loading = true;
+    // Mapa de fitxers "companys" (per resoldre .mtl i textures dels OBJ):
+    // s'indexen pel nom base i pel camí relatiu (carpeta) en minúscules.
+    const companions = new Map();
+    for (const f of files) {
+      companions.set(f.name.toLowerCase(), f);
+      const rp = (f.relPath || f.webkitRelativePath || '').toLowerCase();
+      if (rp) companions.set(rp, f);
+    }
+    // Projecte .4mc → restaura núvols + dibuix i acaba
+    const projFile = files.find(f => f.name.toLowerCase().endsWith('.4mc'));
+    if (projFile) {
+      const badge0 = document.getElementById('loadingBadge');
+      try { if (badge0) badge0.style.display = 'block'; await loadProject(projFile); }
+      catch (e) { diag('⚠ error projecte: ' + e.message); alert('Error obrint el projecte: ' + e.message); }
+      finally { if (badge0) badge0.style.display = 'none'; _loading = false; fileInput.value = ''; }
+      return;
+    }
+    const cloudFiles = files.filter(f => CLOUD_EXTS.includes(f.name.split('.').pop().toLowerCase()));
+    if (cloudFiles.length === 0) { _loading = false; alert('No he trobat cap núvol (.ply .xyz .obj .glb) entre els fitxers.'); return; }
     const badge = document.getElementById('loadingBadge');
     try {
-      for (const file of files) {
+      for (const file of cloudFiles) {
         const ext = file.name.split('.').pop().toLowerCase();
         let cloud = null;
         diag('càrrega: ' + file.name + ' (' + ext + ', ' + Math.round(file.size/1024) + ' KB)');
@@ -2060,7 +2172,7 @@ function setupUI() {
         try {
           if      (ext === 'ply')                cloud = await loadPLY(file);
           else if (ext === 'xyz' || ext === 'txt') cloud = await loadXYZ(file);
-          else if (ext === 'obj')                cloud = await loadOBJ(file);
+          else if (ext === 'obj')                cloud = await loadOBJ(file, companions);
           else if (ext === 'glb' || ext === 'gltf') cloud = await loadGLB(file);
           else { alert(T.unsupported(ext)); continue; }
         } catch (err) {
@@ -2089,18 +2201,45 @@ function setupUI() {
     }
   }
 
-  fileInput.addEventListener('change', (e) => handleFiles(e.target.files));
+  // Recull els fitxers d'un drop, entrant dins les CARPETES (per obtenir .mtl + textures/)
+  async function gatherDropFiles(dt) {
+    const items = dt.items;
+    if (!items || !items.length || !items[0].webkitGetAsEntry) return Array.from(dt.files || []);
+    const roots = [];
+    for (const it of items) { const e = it.webkitGetAsEntry && it.webkitGetAsEntry(); if (e) roots.push(e); }
+    if (roots.length === 0) return Array.from(dt.files || []);
+    const out = [];
+    async function walk(entry, path) {
+      if (entry.isFile) {
+        const f = await new Promise((res, rej) => entry.file(res, rej));
+        try { Object.defineProperty(f, 'relPath', { value: path + entry.name, configurable: true }); } catch (_) {}
+        out.push(f);
+      } else if (entry.isDirectory) {
+        const reader = entry.createReader();
+        const readBatch = () => new Promise((res, rej) => reader.readEntries(res, rej));
+        let batch;
+        do { batch = await readBatch(); for (const e of batch) await walk(e, path + entry.name + '/'); } while (batch.length);
+      }
+    }
+    for (const e of roots) await walk(e, '');
+    return out;
+  }
 
-  // ── Drag & Drop al loadArea i al viewer ──
+  fileInput.addEventListener('change', (e) => handleFiles(e.target.files));
+  const dirInput = document.getElementById('dirInput');
+  if (dirInput) dirInput.addEventListener('change', (e) => handleFiles(e.target.files));
+
+  // ── Drag & Drop al loadArea i al viewer (accepta carpetes) ──
   ['loadArea', 'viewer'].forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;
     el.addEventListener('dragover', (e) => { e.preventDefault(); el.classList.add('drag-over'); });
     el.addEventListener('dragleave', () => el.classList.remove('drag-over'));
-    el.addEventListener('drop', (e) => {
+    el.addEventListener('drop', async (e) => {
       e.preventDefault();
       el.classList.remove('drag-over');
-      handleFiles(e.dataTransfer.files);
+      const files = await gatherDropFiles(e.dataTransfer);
+      handleFiles(files);
     });
   });
 
@@ -2499,6 +2638,7 @@ function updateCloudList() {
 
   updateStatsPanel();
   updateWelcomeScreen();
+  persistSession();   // auto-desat de la sessió (F5 no perd el treball)
 }
 
 function updateStatsPanel() {
@@ -2925,6 +3065,164 @@ function downloadXYZ(points) {
   a.download = 'merged.xyz';
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Persistència de sessió — auto-desat a IndexedDB (F5 no perd el treball)
+// + projecte portàtil .4mc (descarregable / reobrible)
+// ═══════════════════════════════════════════════════════════════════════════
+const MC_DB = 'mergecloud', MC_STORE = 'session', MC_KEY = 'current';
+let _restoring = false, _persistTimer = null, _sessionReady = false;
+
+function _idb() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open(MC_DB, 1);
+    r.onupgradeneeded = () => { const db = r.result; if (!db.objectStoreNames.contains(MC_STORE)) db.createObjectStore(MC_STORE); };
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+function _idbTx(mode, fn) {
+  return _idb().then(db => new Promise((res, rej) => {
+    const tx = db.transaction(MC_STORE, mode);
+    const store = tx.objectStore(MC_STORE);
+    let out; try { out = fn(store); } catch (e) { rej(e); return; }
+    tx.oncomplete = () => res(out && out.result !== undefined ? out.result : out);
+    tx.onerror = () => rej(tx.error);
+  }));
+}
+const idbPut = (key, val) => _idbTx('readwrite', s => s.put(val, key));
+const idbGet = (key) => _idbTx('readonly',  s => s.get(key));
+const idbDel = (key) => _idbTx('readwrite', s => s.delete(key));
+
+// núvol → objecte serialitzable (posicions/colors com a Float32Array; matriu de món)
+function _serializeCloud(cloud) {
+  const g = cloud.geometry;
+  const pos = g.getAttribute('position');
+  const col = g.getAttribute('color');
+  cloud.updateMatrix();
+  return {
+    name: cloud.name || 'Núvol',
+    visible: cloud.visible !== false,
+    matrix: Array.from(cloud.matrix.elements),
+    size: cloud.material?.size || 0.025,
+    pos: pos ? pos.array.slice(0) : null,
+    col: col ? col.array.slice(0) : null,
+  };
+}
+function _deserializeCloud(d) {
+  const g = new THREE.BufferGeometry();
+  const posArr = d.pos instanceof Float32Array ? d.pos : new Float32Array(d.pos || []);
+  g.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
+  const hasCol = !!d.col;
+  if (hasCol) {
+    const colArr = d.col instanceof Float32Array ? d.col : new Float32Array(d.col);
+    g.setAttribute('color', new THREE.BufferAttribute(colArr, 3));
+  }
+  g.computeBoundingBox(); g.computeBoundingSphere();
+  const mat = new THREE.PointsMaterial({ size: d.size || 0.025, vertexColors: hasCol, color: hasCol ? 0xffffff : 0xcccccc });
+  const cloud = new THREE.Points(g, mat);
+  cloud.name = d.name || 'Núvol';
+  cloud.visible = d.visible !== false;
+  if (d.matrix && d.matrix.length === 16) {
+    cloud.matrix.fromArray(d.matrix);
+    cloud.matrix.decompose(cloud.position, cloud.quaternion, cloud.scale);
+  }
+  return cloud;
+}
+
+// Recull l'estat actual de la sessió (núvols + dibuix CAD)
+function _collectSession() {
+  return {
+    v: 1, t: Date.now(),
+    clouds: clouds.map(_serializeCloud),
+    drawing: _ed2d ? _ed2d.getState() : (JSON.parse(localStorage.getItem('mc_editor_state') || 'null')),
+  };
+}
+
+// Auto-desat (debounced) — s'invoca a cada canvi rellevant
+function persistSession(immediate) {
+  if (_restoring || !_sessionReady) return;
+  clearTimeout(_persistTimer);
+  const run = async () => {
+    try {
+      const hasWork = clouds.length > 0 || (_ed2d && _ed2d.count().walls > 0);
+      if (!hasWork) { await idbDel(MC_KEY); return; }
+      await idbPut(MC_KEY, _collectSession());
+    } catch (e) { diag('⚠ auto-desat sessió: ' + e.message); }
+  };
+  if (immediate) return run();
+  _persistTimer = setTimeout(run, 1000);
+}
+
+// Restauració de la sessió a l'arrencada
+async function restoreSession() {
+  let data;
+  try { data = await idbGet(MC_KEY); } catch (_) { _sessionReady = true; return; }
+  if (data && data.clouds && data.clouds.length) {
+    _restoring = true;
+    try {
+      for (const cd of data.clouds) {
+        const cloud = _deserializeCloud(cd);
+        scene.add(cloud); clouds.push(cloud); selectableObjects.push(cloud);
+      }
+      const last = clouds[clouds.length - 1];
+      selectCloud(last);
+      updateCloudList(); updateRaycasterThreshold(); onWindowResize(); fitCameraToObject(last);
+      diag('sessió restaurada: ' + clouds.length + ' núvols (F5)');
+    } catch (e) { diag('⚠ restaurar sessió ha fallat: ' + e.message); }
+    _restoring = false;
+  }
+  _sessionReady = true;
+}
+
+// ── Projecte portàtil .4mc (JSON amb geometria en base64) ──
+function _f32ToB64(f32) {
+  if (!f32) return null;
+  const bytes = new Uint8Array(f32.buffer, f32.byteOffset, f32.byteLength);
+  let s = '';
+  const CH = 0x8000;
+  for (let i = 0; i < bytes.length; i += CH) s += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
+  return btoa(s);
+}
+function _b64ToF32(b64) {
+  if (!b64) return null;
+  const s = atob(b64);
+  const bytes = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) bytes[i] = s.charCodeAt(i);
+  return new Float32Array(bytes.buffer);
+}
+function saveProject() {
+  if (clouds.length === 0 && !(_ed2d && _ed2d.count().walls)) { alert('No hi ha res per desar encara. Carrega un núvol o dibuixa una planta.'); return; }
+  const s = _collectSession();
+  const data = {
+    format: '4mc-project', version: 1, t: s.t,
+    clouds: s.clouds.map(c => ({ name: c.name, visible: c.visible, matrix: c.matrix, size: c.size, pos: _f32ToB64(c.pos), col: c.col ? _f32ToB64(c.col) : null })),
+    drawing: s.drawing,
+  };
+  const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'projecte_' + new Date().toISOString().slice(0, 10) + '.4mc';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  diag('projecte desat com a .4mc (' + data.clouds.length + ' núvols)');
+  return data.clouds.length;
+}
+async function loadProject(file) {
+  const data = JSON.parse(await file.text());
+  if (!data || data.format !== '4mc-project') throw new Error('No és un projecte .4mc vàlid');
+  for (const cd of (data.clouds || [])) {
+    const cloud = _deserializeCloud({ name: cd.name, visible: cd.visible, matrix: cd.matrix, size: cd.size, pos: _b64ToF32(cd.pos), col: cd.col ? _b64ToF32(cd.col) : null });
+    scene.add(cloud); clouds.push(cloud); selectableObjects.push(cloud);
+  }
+  if (data.drawing) {
+    try { localStorage.setItem('mc_editor_state', JSON.stringify(data.drawing)); if (_ed2d) _ed2d.setState(data.drawing); } catch (_) {}
+  }
+  if (clouds.length) { const last = clouds[clouds.length - 1]; selectCloud(last); fitCameraToObject(last); }
+  updateCloudList(); updateRaycasterThreshold(); onWindowResize();
+  persistSession();
+  diag('projecte .4mc carregat: ' + (data.clouds ? data.clouds.length : 0) + ' núvols');
 }
 
 // ─────────────────────────────────────────────
@@ -3587,17 +3885,13 @@ function initTopUI() {
     if (_ed2dActive && _ed2d) { _ed2d.undo(); }
     else { doUndo(); }
   });
-  document.getElementById('tbSave')?.addEventListener('click', async () => {
+  document.getElementById('tbSave')?.addEventListener('click', () => {
     try {
-      const ed = await _ensureEditor2D();
-      const st = ed.getState();
-      localStorage.setItem('mc_editor_state', JSON.stringify(st));
-      const c = ed.count();
-      const resum = c.walls + ' parets, ' + c.nodes + ' nodes' + (c.openings ? ', ' + c.openings + ' obertures' : '');
-      diag('DESAT al navegador: ' + resum);
+      const n = saveProject();   // descarrega un fitxer de projecte .4mc (núvols + dibuix)
+      if (n === undefined) return;
       const b = document.getElementById('tbSave');
-      if (b) { const t = b.textContent; b.textContent = '✓ Desat (' + c.walls + 'p/' + c.openings + 'o)'; setTimeout(() => { b.textContent = t; }, 1600); }
-    } catch (e) { diag('⚠ desar ha fallat: ' + e.message); }
+      if (b) { const t = b.textContent; b.textContent = '✓ Projecte desat'; setTimeout(() => { b.textContent = t; }, 1600); }
+    } catch (e) { diag('⚠ desar projecte ha fallat: ' + e.message); alert('No s\'ha pogut desar el projecte: ' + e.message); }
   });
 }
 
@@ -3670,6 +3964,9 @@ function _wireEditorButtons(ed) {
     const c = ed.count();
     const el = document.getElementById('edCount');
     if (el) el.textContent = c.walls + ' parets, ' + c.nodes + ' nodes' + (c.openings ? ', ' + c.openings + ' obertures' : '');
+    // auto-desat del dibuix (localStorage per l'editor + sessió a IndexedDB)
+    try { localStorage.setItem('mc_editor_state', JSON.stringify(ed.getState())); } catch (_) {}
+    persistSession();
   };
   ed.onChange = upd;
   ed.onThick = (info) => {
@@ -4124,6 +4421,11 @@ try { initCmdLine(); } catch(e) { console.error('initCmdLine() crashed:', e); }
 try { initEditor2DUI(); } catch(e) { console.error('initEditor2DUI() crashed:', e); }
 try { initTopUI(); } catch(e) { console.error('initTopUI() crashed:', e); }
 try { initDiagUI(); } catch(e) { console.error('initDiagUI() crashed:', e); }
+// Restaura la sessió anterior (núvols + dibuix) — F5 no perd el treball
+try { restoreSession(); } catch(e) { console.error('restoreSession() crashed:', e); _sessionReady = true; }
+// Desat de darrera hora en tancar/refrescar (captura moviments/transformacions no desats)
+window.addEventListener('pagehide', () => { try { persistSession(true); } catch(_) {} });
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') { try { persistSession(true); } catch(_) {} } });
 animate();
 
 // Obre els accordions "Propietats" i "Moure/Rotar" per defecte
