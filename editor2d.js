@@ -35,6 +35,13 @@ export function createEditor2D(ctx) {
   let opPick      = null;     // 1a paret triada (empalme/allargar/retallar)
   let opPickPt    = null;     // punt món del 1r clic
 
+  // ── Selecció múltiple estil CAD (mode 'select') ──
+  let selSet      = new Set(); // parets seleccionades (conjunt)
+  let boxStart    = null;      // {x,y} client — inici del requadre
+  let boxNow      = null;      // {x,y} client — posició actual
+  let boxAdd      = false;     // afegir a la selecció (Shift) en comptes de reemplaçar
+  let selBoxEl    = null;      // div overlay del requadre (pantalla)
+
   let openings    = [];       // {id, wallId, t (0-1), width (m), type 'door'|'window'}
   let oid         = 1;
   let opType      = 'door';   // tipus per defecte en col·locar
@@ -129,36 +136,41 @@ export function createEditor2D(ctx) {
     const l = Math.hypot(dx, dz) || 1;
     return { x: dx / l, z: dz / l };
   }
-  // punt de la cara a l'extrem P: mitra amb la paret veïna, o el punt pla si no n'hi ha
-  function mitredPoint(w, P, off) {
-    const a = findNode(w.a), b = findNode(w.b);
-    const nW = wallDirNormal(a, b).n;
-    const base = { x: P.x + nW.x*off, z: P.z + nW.z*off };   // extrem de la cara de w a P
-    if (off === 0) return base;   // cara sobre l'eix: ja passa pel node
+  // Punt mitra de la cara (offset `off` al llarg de nW) a l'extrem P: interseca
+  // amb la cara corresponent de la paret veïna. ROBUST a qualsevol angle (inclòs
+  // 90°) perquè empara les cares pel SENTIT del recorregut A→P→B, no per producte
+  // escalar de normals (que s'anul·la a 90° — origen del vell bug de signe).
+  function mitredCorner(w, P, off, nW) {
+    const base = { x: P.x + nW.x*off, z: P.z + nW.z*off };   // extrem pla de la cara
+    if (off === 0) return base;                              // cara sobre l'eix: passa pel node
     const w2 = adjacentWall(w, P.id);
-    if (!w2) return base;
+    if (!w2) return base;                                    // cantonada no neta → cara plana
     const nW2 = wallDirNormal(findNode(w2.a), findNode(w2.b)).n;
-    const dW = dirAway(w, P.id), dW2 = dirAway(w2, P.id);
-    const sW = Math.sign(off);
-    // ¿la cara de w mira cap a l'interior de la cantonada (cap a l'altra paret)?
-    const wInner = (nW.x*sW*dW2.x + nW.z*sW*dW2.z) > 0;
-    const [oa, ob] = faceOffsets(w2.thickness || 0, w2.side || 0);
+    const dA = dirAway(w,  P.id);            // P → altre extrem de w
+    const dB = dirAway(w2, P.id);            // P → altre extrem de w2
+    const u  = { x: -dA.x, z: -dA.z };       // recorregut entrant per w (cap a P)
+    const Lu = { x: -u.z,  z: u.x };         // normal esquerra del recorregut a w
+    const Lv = { x: -dB.z, z: dB.x };        // normal esquerra del recorregut a w2 (=dB)
+    // costat (esquerra +1 / dreta −1) de la cara respecte al recorregut. nW i Lu
+    // són tots dos normals unitaris de la recta w → el seu producte és ±1 (mai 0).
+    const sideW = Math.sign(off) * Math.sign(nW.x*Lu.x + nW.z*Lu.z);
+    const [p2a, p2b] = faceOffsets(w2.thickness || 0, w2.side || 0);
     let matchOff = null;
-    for (const o of [oa, ob]) {
-      if (o === 0) continue;
-      const s2 = Math.sign(o);
-      const w2Inner = (nW2.x*s2*dW.x + nW2.z*s2*dW.z) > 0;
-      if (w2Inner !== wInner) { matchOff = o; break; }   // emparellament correcte (comprovat empíricament)
+    for (const o2 of [p2a, p2b]) {
+      if (o2 === 0) continue;
+      const sideW2 = Math.sign(o2) * Math.sign(nW2.x*Lv.x + nW2.z*Lv.z);
+      if (sideW2 === sideW) { matchOff = o2; break; }        // mateixa banda del recorregut → s'uneixen
     }
     if (matchOff === null) return base;
-    const I = lineIntersect(faceLine(w, off).p1, faceLine(w, off).p2, faceLine(w2, matchOff).p1, faceLine(w2, matchOff).p2);
-    if (!I) return base;
+    const LA = faceLine(w, off), LB = faceLine(w2, matchOff);
+    const I = lineIntersect(LA.p1, LA.p2, LB.p1, LB.p2);
+    if (!I) return base;                                     // paral·leles (recta) → cara plana
     const d = Math.hypot(I.x - base.x, I.z - base.z);
     const maxD = 6 * Math.max(w.thickness || 0, w2.thickness || 0, 0.05);
-    return d <= maxD ? I : base;
+    return d <= maxD ? I : base;                             // evita mitres delirants en angles molt aguts
   }
-  // les dues cares d'una paret amb gruix, o null
-  // NOTA: unió de cantonades (mitra) pendent d'una revisió dedicada — ara cares planes
+
+  // les dues cares d'una paret amb gruix, amb cantonades mitra, o null
   function wallFaces(w) {
     const a = findNode(w.a), b = findNode(w.b);
     if (!a || !b) return null;
@@ -167,8 +179,8 @@ export function createEditor2D(ctx) {
     const { n } = wallDirNormal(a, b);
     const [o1, o2] = faceOffsets(th, w.side || 0);
     return {
-      f1: [{ x: a.x + n.x*o1, z: a.z + n.z*o1 }, { x: b.x + n.x*o1, z: b.z + n.z*o1 }],
-      f2: [{ x: a.x + n.x*o2, z: a.z + n.z*o2 }, { x: b.x + n.x*o2, z: b.z + n.z*o2 }],
+      f1: [mitredCorner(w, a, o1, n), mitredCorner(w, b, o1, n)],
+      f2: [mitredCorner(w, a, o2, n), mitredCorner(w, b, o2, n)],
     };
   }
 
@@ -235,7 +247,7 @@ export function createEditor2D(ctx) {
       if (!a || !b) continue;
       const isPerim = w.type === 'perimeter';
       const th  = isPerim ? 0 : (w.thickness || 0);   // el perímetre és sempre línia
-      const col = (w === selWall || w === opPick) ? COL_SEL : (isPerim ? COL_PERIM : COL_WALL);
+      const col = (w === selWall || w === opPick || selSet.has(w)) ? COL_SEL : (isPerim ? COL_PERIM : COL_WALL);
       const A = new THREE.Vector3(a.x, a.y, a.z);
       const B = new THREE.Vector3(b.x, b.y, b.z);
       if (th > 0) {
@@ -425,6 +437,62 @@ export function createEditor2D(ctx) {
   }
 
   function changed() { if (api.onChange) api.onChange(); }
+  function emitSel() { if (api.onSel) api.onSel({ count: selSet.size }); }
+
+  // ── Requadre de selecció (finestra / captura) ─────────────────────────────
+  function ensureSelBox() {
+    if (selBoxEl) return selBoxEl;
+    selBoxEl = document.createElement('div');
+    selBoxEl.style.cssText = 'position:fixed;pointer-events:none;z-index:60;display:none;border-width:1.5px;box-sizing:border-box;';
+    document.body.appendChild(selBoxEl);
+    return selBoxEl;
+  }
+  function updateSelBox() {
+    const b = ensureSelBox();
+    if (!boxStart || !boxNow) { b.style.display = 'none'; return; }
+    const x0 = Math.min(boxStart.x, boxNow.x), y0 = Math.min(boxStart.y, boxNow.y);
+    const w = Math.abs(boxNow.x - boxStart.x), h = Math.abs(boxNow.y - boxStart.y);
+    const crossing = boxNow.x < boxStart.x;   // dreta→esquerra = captura (verd, toca)
+    b.style.left = x0 + 'px'; b.style.top = y0 + 'px';
+    b.style.width = w + 'px'; b.style.height = h + 'px';
+    b.style.display = 'block';
+    b.style.borderStyle = crossing ? 'dashed' : 'solid';
+    b.style.borderColor = crossing ? '#00e070' : '#3a8aff';
+    b.style.background   = crossing ? 'rgba(0,224,112,0.10)' : 'rgba(58,138,255,0.10)';
+  }
+  function hideSelBox() { if (selBoxEl) selBoxEl.style.display = 'none'; }
+
+  // intersecció de dos segments de pantalla (bool)
+  function segSeg(p1, p2, p3, p4) {
+    const d = (p2.x-p1.x)*(p4.y-p3.y) - (p2.y-p1.y)*(p4.x-p3.x);
+    if (Math.abs(d) < 1e-9) return false;
+    const t = ((p3.x-p1.x)*(p4.y-p3.y) - (p3.y-p1.y)*(p4.x-p3.x)) / d;
+    const u = ((p3.x-p1.x)*(p2.y-p1.y) - (p3.y-p1.y)*(p2.x-p1.x)) / d;
+    return t >= 0 && t <= 1 && u >= 0 && u <= 1;
+  }
+  function segIntersectsRect(a, b, x0, y0, x1, y1) {
+    const c = [{x:x0,y:y0},{x:x1,y:y0},{x:x1,y:y1},{x:x0,y:y1}];
+    for (let i = 0; i < 4; i++) if (segSeg(a, b, c[i], c[(i+1)%4])) return true;
+    return false;
+  }
+  // aplica la selecció del requadre: finestra (tanca del tot) o captura (toca)
+  function finalizeBoxSelect() {
+    const x0 = Math.min(boxStart.x, boxNow.x), x1 = Math.max(boxStart.x, boxNow.x);
+    const y0 = Math.min(boxStart.y, boxNow.y), y1 = Math.max(boxStart.y, boxNow.y);
+    const crossing = boxNow.x < boxStart.x;
+    if (!boxAdd) selSet.clear();
+    for (const w of walls) {
+      const a = findNode(w.a), b = findNode(w.b);
+      if (!a || !b) continue;
+      const sa = worldToScreen(a), sb = worldToScreen(b);
+      const aIn = sa.x >= x0 && sa.x <= x1 && sa.y >= y0 && sa.y <= y1;
+      const bIn = sb.x >= x0 && sb.x <= x1 && sb.y >= y0 && sb.y <= y1;
+      const hit = crossing ? (aIn || bIn || segIntersectsRect(sa, sb, x0, y0, x1, y1))
+                           : (aIn && bIn);   // finestra: cal que hi entrin els dos extrems
+      if (hit) selSet.add(w);
+    }
+    emitSel(); rebuild();
+  }
 
   // ── Pointer handlers ──────────────────────────────────────────────────────
   function onDown(e) {
@@ -525,6 +593,21 @@ export function createEditor2D(ctx) {
       return;
     }
 
+    if (mode === 'select') {
+      // clic sobre una paret concreta → selecció/afegir individual
+      const w = wallAtScreen(cx, cy, WALL_PX);
+      if (w) {
+        if (e.shiftKey) { if (selSet.has(w)) selSet.delete(w); else selSet.add(w); }
+        else { selSet.clear(); selSet.add(w); }
+        emitSel(); rebuild(); return;
+      }
+      // clic en buit → inicia requadre de selecció
+      boxStart = { x: cx, y: cy }; boxNow = { x: cx, y: cy };
+      boxAdd = e.shiftKey;
+      try { el().setPointerCapture(e.pointerId); } catch (_) {}
+      return;
+    }
+
     // draw / perimeter: inici del traç lliure
     const w = ctx.screenToWorld(cx, cy);
     if (!w) return;
@@ -581,10 +664,21 @@ export function createEditor2D(ctx) {
       }
       rebuild();
     }
+
+    if (mode === 'select' && boxStart) {
+      e.preventDefault();
+      boxNow = { x: cx, y: cy };
+      updateSelBox();
+    }
   }
 
   function onUp() {
     if (!active) return;
+    if (mode === 'select' && boxStart) {
+      if (boxNow && (Math.abs(boxNow.x - boxStart.x) > 3 || Math.abs(boxNow.y - boxStart.y) > 3)) finalizeBoxSelect();
+      boxStart = null; boxNow = null; hideSelBox();
+      return;
+    }
     if (mode === 'edit') {
       if (dragId != null) { mergeNodeIfOverlap(dragId); dragId = null; rebuild(); changed(); }
       return;
@@ -761,6 +855,7 @@ export function createEditor2D(ctx) {
     onChange: null,
     onThick:  null,
     onOp:     null,
+    onSel:    null,
     setActive(b) {
       active = b;
       if (b) {
@@ -775,6 +870,7 @@ export function createEditor2D(ctx) {
         drawing = false; freePts = []; dragId = null; hoverId = null;
         selWall = null; measuring = false; measurePts = [];
         opPick = null; opPickPt = null; opDrag = null;
+        selSet.clear(); boxStart = null; boxNow = null; hideSelBox();
         el().style.cursor = 'default';
         cloudIdx = 0; applyCloud();   // restaura el núvol al sortir
       }
@@ -782,6 +878,8 @@ export function createEditor2D(ctx) {
     setMode(m) {
       mode = m; drawing = false; freePts = []; hoverId = null;
       if (m !== 'thickness') { selWall = null; measuring = false; measurePts = []; }
+      if (m !== 'select') { selSet.clear(); }
+      boxStart = null; boxNow = null; hideSelBox();
       opPick = null; opPickPt = null; opDrag = null;
       removePreview(); rebuild();
       if (m === 'thickness') emitThick(selWall ? 'Paret seleccionada' : 'Selecciona una paret per assignar-li gruix');
@@ -789,6 +887,7 @@ export function createEditor2D(ctx) {
       if (m === 'extend')  emitOp('Allargar: clica la paret a allargar');
       if (m === 'trim')    emitOp('Retallar: clica la paret que fa de tall');
       if (m === 'opening') emitOp('Obertura (' + (opType === 'door' ? 'porta' : 'finestra') + '): clica sobre una paret');
+      if (m === 'select')  { emitSel(); emitOp('Selecció: arrossega → (finestra, tanca) o ← (captura, toca) · clic sobre paret · Shift per afegir'); }
     },
     setOpType(t) { opType = t; emitOp('Tipus: ' + (t === 'door' ? 'porta' : 'finestra') + ' — clica sobre una paret'); },
     setOpWidth(w) {
@@ -805,8 +904,36 @@ export function createEditor2D(ctx) {
       rebuild(); changed();
       emitOp('Porta girada');
     },
-    undo() { const p = walls.pop(); if (p === selWall) selWall = null; rebuild(); changed(); },
-    clear() { nodes = []; walls = []; nid = 1; openings = []; oid = 1; selWall = null; rebuild(); changed(); },
+    undo() { const p = walls.pop(); if (p === selWall) selWall = null; selSet.delete(p); rebuild(); changed(); },
+    clear() { nodes = []; walls = []; nid = 1; openings = []; oid = 1; selWall = null; selSet.clear(); rebuild(); changed(); emitSel(); },
+    // ── Selecció múltiple ──
+    selCount() { return selSet.size; },
+    clearSelection() { selSet.clear(); boxStart = null; boxNow = null; hideSelBox(); rebuild(); emitSel(); },
+    deleteSelection() {
+      if (selSet.size === 0) return 0;
+      const del = new Set(selSet), n = del.size;
+      walls = walls.filter(w => !del.has(w));
+      openings = openings.filter(o => !del.has(o.wall));
+      if (selWall && del.has(selWall)) selWall = null;
+      pruneOrphanNodes();
+      selSet.clear();
+      rebuild(); changed(); emitSel();
+      return n;
+    },
+    applyThicknessSelection(v, side) {
+      if (isNaN(v) || v < 0) { emitOp('Valor de gruix no vàlid'); return 0; }
+      if (selSet.size === 0) { emitOp('Cap paret seleccionada'); return 0; }
+      let n = 0;
+      for (const w of selSet) {
+        if (w.type === 'perimeter') continue;
+        w.thickness = +v;
+        if (side !== undefined && side !== null) { w.side = side; lastSide = side; }
+        n++;
+      }
+      rebuild(); changed();
+      emitOp('Gruix ' + (+v).toFixed(2) + ' m aplicat a ' + n + ' parets seleccionades');
+      return n;
+    },
     cycleCloud() { cloudIdx = (cloudIdx + 1) % 3; applyCloud(); return ['100%', '35%', 'ocult'][cloudIdx]; },
     applyThickness(v) {
       if (!selWall) { emitThick('Selecciona primer una paret'); return; }
@@ -857,7 +984,7 @@ export function createEditor2D(ctx) {
         .map(o => ({ id: oid++, wall: walls[o.wi], t: o.t, width: o.width, type: o.type, rot: o.rot || 0 }));
       if (s.planeY != null) planeY = s.planeY;
       nid = Math.max(nid, s.nid || 1);
-      selWall = null; opPick = null; opDrag = null;
+      selWall = null; opPick = null; opDrag = null; selSet.clear();
       rebuild(); changed();
     },
   };

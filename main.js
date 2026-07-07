@@ -5,7 +5,7 @@ import { TransformControls } from './jsm/controls/TransformControls.js';
 import { loadPLY, loadXYZ } from './loaders/pointcloud_loaders.js';
 
 // ── Versió i feature flags ────────────────────────────────────────────────────
-const APP_VERSION = '2.15.0';
+const APP_VERSION = '2.17.0';
 const FEATURES = {
   segmentacioSemantica: false,  // RANSAC + classificació per tipus
   completatBuits:       false,  // omplir forats basant-se en semàntica
@@ -102,8 +102,49 @@ async function loadGLB(file) {
     return { data: out, comp, count: acc.count };
   }
 
+  // Decodifica una imatge del GLB (bufferView incrustat o data URI) → ImageData per mostrejar
+  async function decodeImage(imageIndex) {
+    const img = gltf.images?.[imageIndex];
+    if (!img) return null;
+    let blob;
+    if (img.bufferView != null && binBuf) {
+      const bv = gltf.bufferViews[img.bufferView];
+      const start = bv.byteOffset || 0;
+      blob = new Blob([binBuf.slice(start, start + bv.byteLength)], { type: img.mimeType || 'image/png' });
+    } else if (img.uri && img.uri.startsWith('data:')) {
+      blob = await (await fetch(img.uri)).blob();
+    } else {
+      return null;   // textura externa (uri a fitxer): no disponible en pujar només el GLB
+    }
+    try {
+      const bmp = await createImageBitmap(blob);
+      const cv = document.createElement('canvas'); cv.width = bmp.width; cv.height = bmp.height;
+      const c2 = cv.getContext('2d', { willReadFrequently: true }); c2.drawImage(bmp, 0, 0);
+      const id = c2.getImageData(0, 0, cv.width, cv.height);
+      bmp.close?.();
+      return id;
+    } catch (_) { return null; }
+  }
+  // mostreig bilineal simple (nearest) amb wrap repeat i V invertida (convenció glTF)
+  function sampleTex(id, u, v) {
+    let x = Math.floor((u - Math.floor(u)) * id.width);
+    let y = Math.floor((1 - (v - Math.floor(v))) * id.height);
+    x = Math.min(Math.max(x, 0), id.width - 1);
+    y = Math.min(Math.max(y, 0), id.height - 1);
+    const o = (y * id.width + x) * 4;
+    return [id.data[o] / 255, id.data[o + 1] / 255, id.data[o + 2] / 255];
+  }
+  const _texCache = new Map();
+  async function getTexImageData(texIndex) {
+    if (_texCache.has(texIndex)) return _texCache.get(texIndex);
+    const src = gltf.textures?.[texIndex]?.source;
+    const id = (src != null) ? await decodeImage(src) : null;
+    _texCache.set(texIndex, id);
+    return id;
+  }
+
   const allPos = [], allCol = [];
-  let anyCol = false;
+  let anyCol = false, sampledTex = false, sawTexture = false;
   for (const mesh of gltf.meshes || []) {
     for (const prim of mesh.primitives || []) {
       const posIdx = prim.attributes?.POSITION;
@@ -111,15 +152,39 @@ async function loadGLB(file) {
       const pos = readAccessor(posIdx);
       for (let i = 0; i < pos.count; i++) allPos.push(pos.data[i*pos.comp], pos.data[i*pos.comp+1], pos.data[i*pos.comp+2]);
       const colIdx = prim.attributes?.COLOR_0;
+      const matDef = (prim.material != null) ? gltf.materials?.[prim.material] : null;
+      const pbr = matDef?.pbrMetallicRoughness;
+      const bct = pbr?.baseColorTexture;
+      if (bct) sawTexture = true;
+      const uvIdx = bct ? (prim.attributes?.['TEXCOORD_' + (bct.texCoord || 0)] ?? prim.attributes?.TEXCOORD_0) : null;
       if (colIdx != null) {
+        // 1) color per vèrtex (COLOR_0)
         anyCol = true;
         const col = readAccessor(colIdx);
-        // si els colors NO estan normalitzats però semblen 0-255, escala
         let mx = 0; for (let k = 0; k < col.data.length; k++) mx = Math.max(mx, col.data[k]);
         const div = mx > 1.001 ? 255 : 1;
         for (let i = 0; i < pos.count; i++) allCol.push(col.data[i*col.comp]/div, col.data[i*col.comp+1]/div, col.data[i*col.comp+2]/div);
+      } else if (bct && uvIdx != null) {
+        // 2) color en TEXTURA → mostreja la imatge a la UV de cada vèrtex
+        const id = await getTexImageData(bct.index);
+        const uv = readAccessor(uvIdx);
+        const f = pbr.baseColorFactor || [1, 1, 1, 1];
+        if (id) {
+          anyCol = true; sampledTex = true;
+          for (let i = 0; i < pos.count; i++) {
+            const c = sampleTex(id, uv.data[i*uv.comp], uv.data[i*uv.comp+1]);
+            allCol.push(c[0]*f[0], c[1]*f[1], c[2]*f[2]);
+          }
+        } else {
+          for (let i = 0; i < pos.count; i++) allCol.push(1, 1, 1);
+        }
+      } else if (pbr?.baseColorFactor) {
+        // 3) sense textura ni COLOR_0: color base pla del material
+        anyCol = true;
+        const f = pbr.baseColorFactor;
+        for (let i = 0; i < pos.count; i++) allCol.push(f[0], f[1], f[2]);
       } else {
-        for (let i = 0; i < pos.count; i++) allCol.push(1, 1, 1);   // sense color → blanc (manté el compte)
+        for (let i = 0; i < pos.count; i++) allCol.push(1, 1, 1);   // res → blanc (manté el compte)
       }
     }
   }
@@ -128,8 +193,9 @@ async function loadGLB(file) {
   geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(allPos), 3));
   if (anyCol) geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(allCol), 3));
   const mat = new THREE.PointsMaterial({ size: 0.025, vertexColors: anyCol, color: anyCol ? 0xffffff : 0xcccccc });
-  const hasTexture = !!(gltf.materials && gltf.materials.some(m => m.pbrMetallicRoughness?.baseColorTexture));
-  console.log(`GLB carregat: ${allPos.length/3} punts · COLOR_0: ${anyCol ? 'sí' : 'NO'}${!anyCol && hasTexture ? ' — el color sembla en una TEXTURA (no per punt), no es pot mostrar per vèrtex' : ''}`);
+  const colSrc = sampledTex ? 'sí (mostrejat de textura)' : (anyCol ? 'sí (per vèrtex/material)' : 'NO');
+  console.log(`GLB carregat: ${allPos.length/3} punts · color: ${colSrc}${!sampledTex && sawTexture && !anyCol ? ' — textura present però no s\'ha pogut mostrejar (potser externa)' : ''}`);
+  diag('GLB ' + file.name + ': ' + (allPos.length/3) + ' punts · color: ' + colSrc);
   const cloud = new THREE.Points(geo, mat);
   cloud.name = file.name;
   return cloud;
@@ -2309,7 +2375,8 @@ function setupUI() {
     updateMeasureList();
   };
 
-  // ── Merge / descàrrega ──
+  // ── Unir (a l'escena) / Descarregar ──
+  document.getElementById('mergeScene').onclick = () => { mergeCloudsInScene(); };
   document.getElementById('merge').onclick = () => {
     if (clouds.length === 0) { alert(T.noClouds); return; }
     const pts = mergeCloudsToXYZPoints(clouds);
@@ -2789,6 +2856,61 @@ function mergeCloudsToXYZPoints(cloudList) {
     }
   }
   return result;
+}
+
+// Uneix tots els núvols carregats en un de sol DINS l'escena (sense descarregar).
+// Aplica la matriu de món de cada núvol i el substitueix pel resultat combinat.
+function mergeCloudsInScene() {
+  const list = clouds.filter(c => c?.geometry?.getAttribute('position'));
+  if (list.length === 0) { alert(T.noClouds); return null; }
+  if (list.length === 1) { diag('unir: només hi ha 1 núvol, no cal unir'); return list[0]; }
+
+  let total = 0;
+  const allHaveColor = list.every(c => c.geometry.getAttribute('color'));
+  for (const c of list) total += c.geometry.getAttribute('position').count;
+
+  const outPos = new Float32Array(total * 3);
+  const outCol = allHaveColor ? new Float32Array(total * 3) : null;
+  const v = new THREE.Vector3();
+  let o = 0;
+  for (const c of list) {
+    const pos = c.geometry.getAttribute('position');
+    const col = c.geometry.getAttribute('color');
+    c.updateWorldMatrix(true, false);
+    const mw = c.matrixWorld;
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i).applyMatrix4(mw);
+      outPos[o] = v.x; outPos[o + 1] = v.y; outPos[o + 2] = v.z;
+      if (outCol) { outCol[o] = col.getX(i); outCol[o + 1] = col.getY(i); outCol[o + 2] = col.getZ(i); }
+      o += 3;
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(outPos, 3));
+  if (outCol) geo.setAttribute('color', new THREE.BufferAttribute(outCol, 3));
+  geo.computeBoundingBox(); geo.computeBoundingSphere();
+  const mat = new THREE.PointsMaterial({ size: 0.025, vertexColors: !!outCol, color: outCol ? 0xffffff : 0xcccccc });
+  const merged = new THREE.Points(geo, mat);
+  merged.name = 'Núvol unit';
+
+  // Treu els originals de l'escena i les llistes; allibera memòria
+  for (const c of list) {
+    scene.remove(c);
+    const ci = clouds.indexOf(c); if (ci >= 0) clouds.splice(ci, 1);
+    const si = selectableObjects.indexOf(c); if (si >= 0) selectableObjects.splice(si, 1);
+    c.geometry?.dispose(); c.material?.dispose();
+  }
+
+  adaptPointSize(merged);
+  scene.add(merged);
+  clouds.push(merged);
+  selectableObjects.push(merged);
+  selectCloud(merged);
+  updateRaycasterThreshold();
+  updateCloudList();
+  diag('UNIT: ' + list.length + ' núvols → 1 (' + total.toLocaleString() + ' punts)' + (outCol ? ' amb color' : ' sense color'));
+  return merged;
 }
 
 function downloadXYZ(points) {
@@ -3430,39 +3552,37 @@ function initTopUI() {
     { tab: 'tabCloud', pal: 'controls' },
     { tab: 'tabDraw',  pal: 'palDraw' },
   ];
-  let closeTimer = null;
-  let pinned = null;
+  // Els menús laterals romanen VISIBLES fins que l'usuari els plega (no s'amaguen per hover).
+  let current = null; // id de la paleta oberta (o null si totes plegades)
   const setOpen = (palId) => {
+    current = palId;
     pals.forEach(p => {
       const on = p.pal === palId;
       document.getElementById(p.pal)?.classList.toggle('open', on);
       document.getElementById(p.tab)?.classList.toggle('active', on);
     });
   };
-  const closeAll = () => { if (pinned) return; setOpen(null); };
   pals.forEach(p => {
     const tab = document.getElementById(p.tab);
     const pal = document.getElementById(p.pal);
     if (!tab || !pal) return;
-    // Escriptori: obre en passar-hi el ratolí, tanca en sortir
-    tab.addEventListener('mouseenter', () => { clearTimeout(closeTimer); setOpen(p.pal); });
-    pal.addEventListener('mouseenter', () => clearTimeout(closeTimer));
-    pal.addEventListener('mouseleave', () => { closeTimer = setTimeout(closeAll, 350); });
-    tab.addEventListener('mouseleave', () => { closeTimer = setTimeout(closeAll, 350); });
-    // Tàctil / clic: la pestanya obre o tanca (fixa)
+    // Clic a la pestanya: obre aquesta paleta, o la plega si ja és l'oberta
     tab.addEventListener('click', (e) => {
       e.stopPropagation();
-      clearTimeout(closeTimer);
-      if (pinned === p.pal) { pinned = null; setOpen(null); }
-      else { pinned = p.pal; setOpen(p.pal); }
+      setOpen(current === p.pal ? null : p.pal);
     });
     pal.addEventListener('click', (e) => e.stopPropagation());
   });
-  // Tocar fora de les paletes → tanca-les (útil a tàctil, sense hover)
-  document.addEventListener('click', () => { pinned = null; setOpen(null); });
+  // Botó ◀ dins de cada paleta → la plega lateralment
+  document.querySelectorAll('.pal-collapse').forEach(btn => {
+    btn.addEventListener('click', (e) => { e.stopPropagation(); setOpen(null); });
+  });
+  // Per defecte, mostra la paleta NÚVOL perquè els menús siguin visibles a l'inici
+  setOpen('controls');
 
   // Barra superior — accions globals
-  document.getElementById('tbMerge')?.addEventListener('click', () => document.getElementById('merge')?.click());
+  document.getElementById('tbMerge')?.addEventListener('click', () => mergeCloudsInScene());
+  document.getElementById('tbDownload')?.addEventListener('click', () => document.getElementById('merge')?.click());
   document.getElementById('tbUndo')?.addEventListener('click', () => {
     if (_ed2dActive && _ed2d) { _ed2d.undo(); }
     else { doUndo(); }
@@ -3470,10 +3590,13 @@ function initTopUI() {
   document.getElementById('tbSave')?.addEventListener('click', async () => {
     try {
       const ed = await _ensureEditor2D();
-      localStorage.setItem('mc_editor_state', JSON.stringify(ed.getState()));
-      diag('DESAT (dibuix guardat al navegador)');
+      const st = ed.getState();
+      localStorage.setItem('mc_editor_state', JSON.stringify(st));
+      const c = ed.count();
+      const resum = c.walls + ' parets, ' + c.nodes + ' nodes' + (c.openings ? ', ' + c.openings + ' obertures' : '');
+      diag('DESAT al navegador: ' + resum);
       const b = document.getElementById('tbSave');
-      if (b) { const t = b.textContent; b.textContent = '✓ Desat'; setTimeout(() => { b.textContent = t; }, 1200); }
+      if (b) { const t = b.textContent; b.textContent = '✓ Desat (' + c.walls + 'p/' + c.openings + 'o)'; setTimeout(() => { b.textContent = t; }, 1600); }
     } catch (e) { diag('⚠ desar ha fallat: ' + e.message); }
   });
 }
@@ -3527,14 +3650,17 @@ function _edSetModeBtn(m) {
   document.getElementById('edModeExtend')?.classList.toggle('active', m === 'extend');
   document.getElementById('edModeTrim')?.classList.toggle('active', m === 'trim');
   document.getElementById('edModeOpening')?.classList.toggle('active', m === 'opening');
+  document.getElementById('edModeSelect')?.classList.toggle('active', m === 'select');
   const tp = document.getElementById('edThickPanel');
   if (tp) tp.style.display = (m === 'thickness') ? 'flex' : 'none';
+  const sp = document.getElementById('edSelPanel');
+  if (sp) sp.style.display = (m === 'select') ? 'flex' : 'none';
   const otr = document.getElementById('edOpTypeRow');
   if (otr) otr.style.display = (m === 'opening') ? 'flex' : 'none';
   const owr = document.getElementById('edOpWidthRow');
   if (owr) owr.style.display = (m === 'opening') ? 'flex' : 'none';
   const oi = document.getElementById('edOpInfo');
-  if (oi && !['empalme','extend','trim','opening'].includes(m)) oi.textContent = '';
+  if (oi && !['empalme','extend','trim','opening','select'].includes(m)) oi.textContent = '';
 }
 
 function _wireEditorButtons(ed) {
@@ -3561,6 +3687,26 @@ function _wireEditorButtons(ed) {
   document.getElementById('edModeExtend').onclick  = () => { ed.setMode('extend'); _edSetModeBtn('extend'); };
   document.getElementById('edModeTrim').onclick    = () => { ed.setMode('trim'); _edSetModeBtn('trim'); };
   document.getElementById('edModeOpening').onclick = () => { ed.setMode('opening'); _edSetModeBtn('opening'); };
+  document.getElementById('edModeSelect').onclick  = () => { ed.setMode('select'); _edSetModeBtn('select'); };
+  // ── Accions sobre la selecció múltiple ──
+  let _edSelSide = 0;
+  const _setSelSide = (s, btn) => {
+    _edSelSide = s;
+    ['edSelSideCenter','edSelSideA','edSelSideB'].forEach(id => document.getElementById(id)?.classList.remove('active'));
+    document.getElementById(btn)?.classList.add('active');
+  };
+  document.getElementById('edSelSideCenter').onclick = () => _setSelSide(0, 'edSelSideCenter');
+  document.getElementById('edSelSideA').onclick      = () => _setSelSide(1, 'edSelSideA');
+  document.getElementById('edSelSideB').onclick      = () => _setSelSide(-1, 'edSelSideB');
+  document.getElementById('edSelThickApply').onclick = () => { ed.applyThicknessSelection(parseFloat(document.getElementById('edSelThickVal').value), _edSelSide); upd(); };
+  document.getElementById('edSelDelete').onclick     = () => { ed.deleteSelection(); upd(); };
+  ed.onSel = (info) => {
+    const el = document.getElementById('edSelInfo');
+    if (!el) return;
+    el.innerHTML = info.count > 0
+      ? '<b style="color:#ffdd00">' + info.count + ' paret(s)</b> seleccionada(es) — aplica gruix o esborra'
+      : 'Arrossega → <b style="color:#8ab4ff">finestra</b> (tanca) · ← <b style="color:#6de0a0">captura</b> (toca) · Shift afegeix';
+  };
   document.getElementById('edOpDoor').onclick   = () => { ed.setOpType('door'); document.getElementById('edOpDoor').classList.add('active'); document.getElementById('edOpWindow').classList.remove('active'); };
   document.getElementById('edOpWindow').onclick = () => { ed.setOpType('window'); document.getElementById('edOpWindow').classList.add('active'); document.getElementById('edOpDoor').classList.remove('active'); };
   document.getElementById('edW60').onclick  = () => ed.setOpWidth(0.60);
