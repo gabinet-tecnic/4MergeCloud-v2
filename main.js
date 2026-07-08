@@ -430,6 +430,7 @@ let alignSrcPts = [];
 let alignTgtPts = [];
 let alignMarkers = [];
 let alignSrcCloud = null;
+let alignTgtCloud = null;   // núvol de destí (per al reforç de color+posició)
 
 // ─────────────────────────────────────────────
 // Init
@@ -721,7 +722,7 @@ function startAlign(n) {
   alignMode  = n;
   alignPhase = 'pickCloud';
   alignSrcPts = []; alignTgtPts = [];
-  alignSrcCloud = null;
+  alignSrcCloud = null; alignTgtCloud = null;
   clearAlignMarkers();
   transformControls.detach();
   setMode('align');
@@ -810,12 +811,18 @@ function handleAlignClick(pWorld, cloud) {
   m.position.copy(pWorld);
   scene.add(m); alignMarkers.push(m);
   alignTgtPts.push(pWorld.clone());
+  if (!alignTgtCloud) alignTgtCloud = cloud;
 
   if (alignTgtPts.length === alignMode) {
-    pushUndo(alignSrcCloud);
-    if (alignMode === 2) applyAlign2pt(alignSrcCloud, alignSrcPts, alignTgtPts);
-    else                 applyAlign3pt(alignSrcCloud, alignSrcPts, alignTgtPts);
+    // captura referències abans que cancelAlign() netegi l'estat
+    const srcC = alignSrcCloud, tgtC = alignTgtCloud;
+    const anchors = alignTgtPts.map(p => p.clone());
+    pushUndo(srcC);
+    if (alignMode === 2) applyAlign2pt(srcC, alignSrcPts, alignTgtPts);
+    else                 applyAlign3pt(srcC, alignSrcPts, alignTgtPts);
     cancelAlign();
+    // Reforç automàtic: afinament local per color+posició de l'entorn dels punts
+    refineAlignByColor(srcC, tgtC, anchors);
   } else {
     updateAlignBadge();
   }
@@ -1180,6 +1187,127 @@ async function applyICP() {
       :`Error ICP: ${err.message}. Fes una alineació manual prèvia.`);
   }
 }
+// ── Reforç d'alineació per COLOR + POSICIÓ de l'entorn dels punts picats ──────
+// Mostreja els punts (posició món + color) al voltant dels anchors, dins un radi.
+function _sampleEnv(cloud, anchorsWorld, radius, maxPts) {
+  cloud.updateMatrixWorld(true);
+  const pos = cloud.geometry.getAttribute('position');
+  const col = cloud.geometry.getAttribute('color');
+  if (!pos) return [];
+  const mw = cloud.matrixWorld, r2 = radius * radius, v = new THREE.Vector3();
+  const stride = Math.max(1, Math.floor(pos.count / 300000));   // acota el recorregut
+  const out = [];
+  for (let i = 0; i < pos.count; i += stride) {
+    v.fromBufferAttribute(pos, i).applyMatrix4(mw);
+    let near = false;
+    for (const a of anchorsWorld) { const dx=v.x-a.x, dy=v.y-a.y, dz=v.z-a.z; if (dx*dx+dy*dy+dz*dz <= r2) { near = true; break; } }
+    if (!near) continue;
+    out.push({ x:v.x, y:v.y, z:v.z, c: col ? [col.getX(i), col.getY(i), col.getZ(i)] : null });
+    if (out.length >= maxPts) break;
+  }
+  return out;
+}
+
+// Veí que minimitza dist_posició² + colorW·dist_color²: el COLOR guia la
+// correspondència (troba el mateix punt encara que la posició sigui ambigua),
+// no només la filtra. Retorna també la distància de color del match triat.
+function _nearestColor(p, tgtEnv, hash, cell, colorW) {
+  const kx=Math.floor(p.x/cell), ky=Math.floor(p.y/cell), kz=Math.floor(p.z/cell);
+  let best=Infinity, bi=-1, bd=Infinity, bc=0;
+  for (let dx=-1;dx<=1;dx++) for (let dy=-1;dy<=1;dy++) for (let dz=-1;dz<=1;dz++) {
+    const bucket=hash.get(`${kx+dx},${ky+dy},${kz+dz}`);
+    if (!bucket) continue;
+    for (const i of bucket) {
+      const q=tgtEnv[i];
+      const dp=(q.x-p.x)**2+(q.y-p.y)**2+(q.z-p.z)**2;
+      let dc=0;
+      if (colorW>0 && p.c && q.c) dc=(p.c[0]-q.c[0])**2+(p.c[1]-q.c[1])**2+(p.c[2]-q.c[2])**2;
+      const score=dp+colorW*dc;
+      if (score<best) { best=score; bi=i; bd=Math.sqrt(dp); bc=Math.sqrt(dc); }
+    }
+  }
+  return { dist:bd, idx:bi, cdist:bc };
+}
+
+// ICP LOCAL (entorn dels punts) GUIAT per color → refina l'alineació manual per
+// 2/3 punts. NO reintrodueix gir global: només ajusta l'entorn triat. Coarse-to-fine.
+async function refineAlignByColor(srcCloud, tgtCloud, anchorsWorld) {
+  if (!srcCloud || !tgtCloud || srcCloud === tgtCloud || !anchorsWorld || !anchorsWorld.length) return;
+  const badge = document.getElementById('loadingBadge');
+  try {
+    const bb = new THREE.Box3().setFromObject(tgtCloud);
+    const diag = bb.getSize(new THREE.Vector3()).length() || 1;
+    let spread = 0;
+    for (let i=0;i<anchorsWorld.length;i++) for (let j=i+1;j<anchorsWorld.length;j++) spread = Math.max(spread, anchorsWorld[i].distanceTo(anchorsWorld[j]));
+    let radius = Math.min(Math.max(spread * 1.4, diag * 0.10), diag * 0.5);
+    if (!(radius > 1e-3)) radius = diag * 0.2;
+
+    if (badge) { badge.style.display = 'block'; badge.textContent = '⏳ Afinant amb el color de l\'entorn…'; }
+    await new Promise(r => setTimeout(r, 0));
+
+    const srcEnv = _sampleEnv(srcCloud, anchorsWorld, radius, 4000);
+    const tgtEnv = _sampleEnv(tgtCloud, anchorsWorld, radius, 6000);
+    if (srcEnv.length < 20 || tgtEnv.length < 20) { if (badge) badge.style.display='none'; diag('reforç color: pocs punts a l\'entorn, s\'omet'); return; }
+    const haveColor = srcEnv.some(p=>p.c) && tgtEnv.some(p=>p.c);
+    let cell = Math.max(radius / 6, 0.02);   // coarse-to-fine: comença gruixut i afina
+
+    let Rtot=[[1,0,0],[0,1,0],[0,0,1]], ttot=[0,0,0], prevErr=Infinity;
+    let work = srcEnv.map(p => ({ x:p.x, y:p.y, z:p.z, c:p.c }));
+    const COLOR_TH = 0.30;   // distància de color màxima del match (rebuig d'outliers)
+    for (let it=0; it<26; it++) {
+      const colorW = haveColor ? (6*cell)*(6*cell) : 0;   // el color guia la correspondència (pes en posició²)
+      const hash = _buildHash(tgtEnv, cell);
+      const sF=[], tF=[], dists=[];
+      for (const p of work) {
+        const { dist, idx, cdist } = _nearestColor(p, tgtEnv, hash, cell, colorW);
+        if (idx < 0) continue;
+        if (haveColor && p.c && tgtEnv[idx].c && cdist > COLOR_TH) continue;   // sense bon match de color → outlier
+        sF.push(p); tF.push({ x:tgtEnv[idx].x, y:tgtEnv[idx].y, z:tgtEnv[idx].z }); dists.push(dist);
+      }
+      if (sF.length < 8) break;
+      const ds=[...dists].sort((a,b)=>a-b);
+      const th = ds[Math.floor(ds.length/2)] * 2.5 + 1e-6;
+      const sK=[], tK=[];
+      for (let i=0;i<sF.length;i++) if (dists[i] < th) { sK.push(sF[i]); tK.push(tF[i]); }
+      if (sK.length < 8) break;
+      let err=0; for (let i=0;i<sK.length;i++) err += (sK[i].x-tK[i].x)**2+(sK[i].y-tK[i].y)**2+(sK[i].z-tK[i].z)**2;
+      err = Math.sqrt(err / sK.length);
+      if (Math.abs(prevErr - err) < 1e-7) break;
+      prevErr = err;
+      const { R, t } = _kabsch(sK, tK);
+      if (!isFinite(R[0][0]) || !isFinite(t[0])) break;
+      for (const p of work) { const {x,y,z}=p; p.x=R[0][0]*x+R[0][1]*y+R[0][2]*z+t[0]; p.y=R[1][0]*x+R[1][1]*y+R[1][2]*z+t[1]; p.z=R[2][0]*x+R[2][1]*y+R[2][2]*z+t[2]; }
+      Rtot=_m3mul(R,Rtot);
+      ttot=[R[0][0]*ttot[0]+R[0][1]*ttot[1]+R[0][2]*ttot[2]+t[0], R[1][0]*ttot[0]+R[1][1]*ttot[1]+R[1][2]*ttot[2]+t[1], R[2][0]*ttot[0]+R[2][1]*ttot[1]+R[2][2]*ttot[2]+t[2]];
+      if (it >= 1) cell = Math.max(radius / 50, cell * 0.8);   // afina progressivament (coarse-to-fine)
+      if (it % 4 === 3) await new Promise(r => setTimeout(r, 0));
+    }
+    if (badge) { badge.style.display = 'none'; badge.textContent = '⏳ Carregant fitxer...'; }
+
+    const vals=[...Rtot[0],...Rtot[1],...Rtot[2],...ttot];
+    if (vals.some(v => !isFinite(v))) { diag('reforç color: resultat no vàlid, s\'omet'); return; }
+    const mat = new THREE.Matrix4().set(
+      Rtot[0][0],Rtot[0][1],Rtot[0][2],ttot[0],
+      Rtot[1][0],Rtot[1][1],Rtot[1][2],ttot[1],
+      Rtot[2][0],Rtot[2][1],Rtot[2][2],ttot[2], 0,0,0,1);
+    // Seguretat: mesura el desplaçament REAL dels anchors; si és > radi, la correcció
+    // ha divergit → l'ometem i deixem l'alineació manual tal com estava.
+    let maxShift = 0;
+    for (const a of anchorsWorld) { const b = a.clone().applyMatrix4(mat); maxShift = Math.max(maxShift, a.distanceTo(b)); }
+    if (maxShift > radius) { diag('reforç color: correcció massa gran (' + maxShift.toFixed(2) + ' m), s\'omet'); return; }
+
+    srcCloud.applyMatrix4(mat);
+    srcCloud.updateMatrixWorld(true);
+    syncClipBox(srcCloud);
+    selectCloud(srcCloud);
+    diag('reforç color+posició aplicat (err ' + (isFinite(prevErr) ? prevErr.toFixed(4) : '—') + ' m · radi ' + radius.toFixed(2) + ' m · color ' + (haveColor ? 'sí' : 'no') + ')');
+  } catch (e) {
+    if (badge) badge.style.display = 'none';
+    console.warn('reforç color+posició error:', e);
+    diag('⚠ reforç color ha fallat: ' + e.message);
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // ── Transform confirm badge ───────────────────────────────────────────────────
 let _confirmTimer = null;
