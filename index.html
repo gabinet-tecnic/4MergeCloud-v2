@@ -594,6 +594,10 @@
     #loadArea { margin: 4px 0 10px; border-radius: 10px; }
     .section-label { padding: 8px 4px 4px; }
     #cloudListPanel { padding: 0; }
+
+    /* Estats buits en anglès (contingut generat per CSS; el traductor del DOM no hi arriba) */
+    html:lang(en) #cloudListPanel:empty::before { content: 'No active cloud'; }
+    html:lang(en) #dxfListPanel:empty::before { content: 'No DXF loaded'; }
   </style>
 </head>
 <body>

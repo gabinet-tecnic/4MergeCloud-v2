@@ -5,7 +5,7 @@ import { TransformControls } from './jsm/controls/TransformControls.js';
 import { loadPLY, loadXYZ } from './loaders/pointcloud_loaders.js';
 
 // ── Versió i feature flags ────────────────────────────────────────────────────
-const APP_VERSION = '2.21.0';
+const APP_VERSION = '2.22.0';
 const FEATURES = {
   segmentacioSemantica: false,  // RANSAC + classificació per tipus
   completatBuits:       false,  // omplir forats basant-se en semàntica
@@ -313,6 +313,78 @@ const T = (window.APP_LANG === 'en') ? {
   alignTgt:       (c, t) => `Punt DESTÍ ${c}/${t} — fes clic al núvol de referència · ESC per cancel·lar`,
   needTwoClouds:  'Cal tenir almenys 2 núvols carregats per alinear.',
 };
+
+// ── Traducció de la interfície (etiquetes estàtiques CA → EN) ─────────────────
+// El commutador CAT/ENG recarrega amb ?lang=en; aquí traduïm el text del DOM.
+const I18N = {
+  // Barra superior
+  'Obrir':'Open','Unir':'Merge','Descarregar':'Download','Desar projecte':'Save project','Desfer últim':'Undo last','Diagnòstic':'Diagnostics',
+  // Pestanyes / mòduls
+  'NÚVOL':'CLOUD','DIBUIX':'DRAWING',
+  // Càrrega
+  'Carregar Fitxer (XYZ/PLY/OBJ/GLB)':'Load File (XYZ/PLY/OBJ/GLB)',
+  'ARROSSEGA FITXERS O UNA CARPETA AQUÍ':'DRAG FILES OR A FOLDER HERE',
+  'OBJ amb textura?':'Textured OBJ?','Carrega la carpeta sencera':'Load the whole folder',
+  '(obj + mtl + textures) per veure\'n el color':'(obj + mtl + textures) to see its color',
+  'Núvols carregats':'Loaded clouds','Cap núvol actiu':'No active cloud',
+  'Cap núvol carregat. Comença carregant un fitxer PLY o XYZ.':'No cloud loaded. Start by loading a PLY or XYZ file.',
+  // Accordions
+  'Propietats':'Properties','Moure Núvol / Rotar Núvol':'Move Cloud / Rotate Cloud','Caixa de Tall':'Clipping Box',
+  'Alinear 2 Punts / ICP':'Align 2 Points / ICP','Clean & Markup':'Clean & Markup','Carregar DXF Overlay':'Load DXF Overlay','Filtre de Soroll (SOR)':'Noise Filter (SOR)',
+  // Botons NÚVOL
+  'Moure Núvol':'Move Cloud','Rotar Núvol':'Rotate Cloud','Transformació Numèrica':'Numeric Transform',
+  'Crear Caixa de Tall':'Create Clipping Box','Moure Caixa':'Move Box','Rotar Caixa':'Rotate Box',
+  'Aplicar Tall (Definitiu)':'Apply Cut (Final)','Eliminar Caixa':'Remove Box','Exportar Secció DXF':'Export Section DXF',
+  'Alinear 2 punts':'Align 2 points','Alinear 3 punts':'Align 3 points','Ajustar ICP (finor)':'Fine-tune ICP',
+  'Dibuix / Anotació':'Draw / Annotate','Lliure':'Freehand','Línia':'Line','Fletxa':'Arrow','Desfer traç':'Undo stroke',
+  'Importar Contorn DXF':'Import DXF Outline','Aplicar Filtre':'Apply Filter','Aplicar':'Apply','Cancel·lar':'Cancel',
+  'Desfer':'Undo','Mesura':'Measure','Cotes':'Dimensions','REINICIAR TOT':'RESET ALL','Netejar':'Clear','Rectangle':'Rectangle',
+  // DIBUIX (editor CAD)
+  'Parets':'Walls','Perímetre':'Perimeter','Editar':'Edit','Esborrar':'Erase','Gruix':'Thickness','Seleccionar (multi)':'Select (multi)',
+  'Empalme':'Fillet','Allargar':'Extend','Retallar':'Trim','Portes / Finestres':'Doors / Windows','Porta':'Door','Finestra':'Window',
+  'Doble':'Double','Centrat':'Centered','Costat A':'Side A','Costat B':'Side B','Mesurar del núvol':'Measure from cloud',
+  'Aplicar gruix a totes':'Apply thickness to all','Esborrar selecció':'Delete selection','Exportar DXF':'Export DXF','Activar editor':'Activate editor',
+  // Benvinguda
+  'Benvingut/da a 4 Merge Cloud':'Welcome to 4 Merge Cloud',
+  'L\'editor 3D i Copilot IA de núvols de punts de referència':'The 3D editor and AI Copilot for reference point clouds',
+  'Arrossegar o Carregar Fitxer de Punts':'Drag or Load a Point File','Carrega fitxer DXF Overlay':'Load DXF Overlay file',
+  'Explorar ordinador →':'Browse computer →','Importar contorn vector →':'Import vector outline →',
+  // Marca / IA
+  'Visor i Editor 3D de Núvols de Punts':'3D Point Cloud Viewer & Editor',
+  'Copilot IA — Línia de Comandes':'AI Copilot — Command Line',
+};
+const I18N_ATTR = {
+  // placeholders
+  'gruix (m)':'thickness (m)',
+  'Escriu una ordre o pregunta (ex: vista de planta, aplica filtre soroll)…':'Type a command or question (e.g. top view, apply noise filter)…',
+  // tooltips barra superior
+  'Obrir fitxers o una carpeta (XYZ/PLY/OBJ/GLB o un projecte .4mc)':'Open files or a folder (XYZ/PLY/OBJ/GLB or a .4mc project)',
+  'Uneix tots els núvols carregats en un de sol dins l\'escena (no descarrega)':'Merge all loaded clouds into one in the scene (does not download)',
+  'Descarrega el núvol (o núvols) actuals com a fitxer XYZ':'Download the current cloud(s) as an XYZ file',
+  'Desfà l\'última acció':'Undo the last action','Registre de diagnòstic':'Diagnostics log',
+  'Amagar el panell':'Hide panel','Mostrar el panell d\'eines':'Show tools panel',
+  // vistes
+  'Vista 3D':'3D View','Vista en Planta':'Top View','Vista Frontal':'Front View','Vista Posterior':'Back View','Lateral Dreta':'Right Side','Lateral Esquerra':'Left Side',
+};
+function _translateUI() {
+  document.documentElement.lang = window.APP_LANG || 'ca';   // activa els estils :lang() (estats buits ::before)
+  if (window.APP_LANG !== 'en') return;
+  const trText = (s) => {
+    const m = s.match(/^([\p{S}\p{P}\s]*?)([\p{L}\p{N}].*)$/su);
+    const pre = m ? m[1] : '', label = (m ? m[2] : s).trim();
+    const tr = I18N[label];
+    return tr != null ? pre + tr : null;
+  };
+  const roots = ['topBar','sidebox','welcomeScreen','diagPanel','branding','viewToolbar','cmdLine']
+    .map(id => document.getElementById(id)).filter(Boolean);
+  for (const root of roots) {
+    const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const nodes = []; while (w.nextNode()) nodes.push(w.currentNode);
+    for (const n of nodes) { if (!n.nodeValue || !n.nodeValue.trim()) continue; const tr = trText(n.nodeValue); if (tr != null && tr !== n.nodeValue) n.nodeValue = tr; }
+    root.querySelectorAll('[title]').forEach(el => { const t = I18N_ATTR[el.getAttribute('title')]; if (t) el.setAttribute('title', t); });
+    root.querySelectorAll('[placeholder]').forEach(el => { const t = I18N_ATTR[el.getAttribute('placeholder')]; if (t) el.setAttribute('placeholder', t); });
+  }
+}
 
 let scene, camera, renderer, controls, transformControls;
 
@@ -4517,6 +4589,7 @@ function animate() {
       controls.update();
     }
     updateClipPlanes();
+    updateGizmo();
 
     const { w: W, h: H } = _viewerSize();
     const camA = useOrtho ? orthoCamera : camera;
@@ -4549,6 +4622,78 @@ window.addEventListener('unhandledrejection', e => {
   diag('⚠ PROMISE REBUTJADA: ' + ((e.reason && e.reason.message) || e.reason || 'desconegut'));
 });
 
+// ── Gizmo d'orientació / rotació de vista (SVG lleuger) ───────────────────────
+// Mostra els eixos X/Y/Z segons la vista actual · clic a un eix = encara la vista ·
+// arrossega el gizmo = orbita la càmera. Es dibuixa a la cantonada del visor.
+let _gizmo = null;
+const _SVGNS = 'http://www.w3.org/2000/svg';
+function initGizmo() {
+  const viewer = document.getElementById('viewer');
+  if (!viewer || _gizmo) return;
+  const el = document.createElement('div');
+  el.id = 'navGizmo';
+  el.title = 'Arrossega per orbitar · clica un eix per encarar la vista';
+  el.style.cssText = 'position:absolute;right:14px;bottom:96px;width:84px;height:84px;z-index:16;cursor:grab;touch-action:none;';
+  el.innerHTML = '<svg width="84" height="84" viewBox="0 0 84 84"><circle cx="42" cy="42" r="40" fill="rgba(20,22,29,.82)" stroke="#2a2d40" stroke-width="1"/><g id="_gzLines"></g><g id="_gzDots"></g></svg>';
+  viewer.appendChild(el);
+  const dots = el.querySelector('#_gzDots'), lines = el.querySelector('#_gzLines');
+  const AX = [
+    { lab:'X', col:'#e06a52', pos:true,  dir:[1,0,0],  up:[0,1,0],  v:[1,0,0] },
+    { lab:'',  col:'#e06a52', pos:false, dir:[-1,0,0], up:[0,1,0],  v:[-1,0,0] },
+    { lab:'Y', col:'#63c06f', pos:true,  dir:[0,1,0],  up:[0,0,-1], v:[0,1,0] },
+    { lab:'',  col:'#63c06f', pos:false, dir:[0,-1,0], up:[0,0,1],  v:[0,-1,0] },
+    { lab:'Z', col:'#4f97e6', pos:true,  dir:[0,0,1],  up:[0,1,0],  v:[0,0,1] },
+    { lab:'',  col:'#4f97e6', pos:false, dir:[0,0,-1], up:[0,1,0],  v:[0,0,-1] },
+  ];
+  const items = AX.map(a => {
+    let line = null;
+    if (a.pos) { line = document.createElementNS(_SVGNS,'line'); line.setAttribute('x1','42'); line.setAttribute('y1','42'); line.setAttribute('stroke',a.col); line.setAttribute('stroke-width','2'); lines.appendChild(line); }
+    const g = document.createElementNS(_SVGNS,'g'); g.style.cursor = 'pointer';
+    const c = document.createElementNS(_SVGNS,'circle'); c.setAttribute('r', a.pos ? '9' : '6'); c.setAttribute('fill', a.pos ? a.col : 'rgba(20,22,29,.92)'); c.setAttribute('stroke', a.col); c.setAttribute('stroke-width','1.5');
+    const t = document.createElementNS(_SVGNS,'text'); t.setAttribute('text-anchor','middle'); t.setAttribute('dominant-baseline','central'); t.setAttribute('font-size','10'); t.setAttribute('font-weight','700'); t.setAttribute('fill','#fff'); t.textContent = a.lab;
+    g.appendChild(c); g.appendChild(t); dots.appendChild(g);
+    g.addEventListener('pointerdown', (e) => { e.stopPropagation(); try { setOrthoView(new THREE.Vector3(a.dir[0],a.dir[1],a.dir[2]), new THREE.Vector3(a.up[0],a.up[1],a.up[2])); } catch(_){} });
+    return { a, line, g, v: new THREE.Vector3(a.v[0], a.v[1], a.v[2]) };
+  });
+  _gizmo = { el, items };
+  // Arrossegar el fons → orbita
+  let drag = false, lx = 0, ly = 0;
+  el.addEventListener('pointerdown', (e) => { drag = true; lx = e.clientX; ly = e.clientY; el.style.cursor = 'grabbing'; try { el.setPointerCapture(e.pointerId); } catch(_){} });
+  el.addEventListener('pointermove', (e) => { if (!drag) return; const dx = e.clientX - lx, dy = e.clientY - ly; lx = e.clientX; ly = e.clientY; _gizmoOrbit(dx, dy); });
+  const stop = () => { drag = false; el.style.cursor = 'grab'; };
+  el.addEventListener('pointerup', stop); el.addEventListener('pointercancel', stop);
+}
+function _gizmoOrbit(dx, dy) {
+  if (!controls || !camera) return;
+  if (useOrtho) activate3DView();
+  const offset = camera.position.clone().sub(controls.target);
+  const sph = new THREE.Spherical().setFromVector3(offset);
+  sph.theta -= dx * 0.012;
+  sph.phi   -= dy * 0.012;
+  sph.phi = Math.max(0.001, Math.min(Math.PI - 0.001, sph.phi));
+  offset.setFromSpherical(sph);
+  camera.position.copy(controls.target).add(offset);
+  controls.update();
+}
+function updateGizmo() {
+  if (!_gizmo) return;
+  const cam = (useOrtho && orthoCamera) ? orthoCamera : camera;
+  if (!cam) return;
+  const inv = new THREE.Matrix4().copy(cam.matrixWorld).invert();
+  const R = 27, dots = [];
+  for (const it of _gizmo.items) {
+    const d = it.v.clone().transformDirection(inv);   // eix en espai de càmera
+    dots.push({ it, x: 42 + d.x*R, y: 42 - d.y*R, z: d.z });
+  }
+  dots.sort((p,q) => p.z - q.z);   // darrere primer (z-order)
+  for (const o of dots) {
+    o.it.g.setAttribute('transform', `translate(${o.x.toFixed(1)},${o.y.toFixed(1)})`);
+    o.it.g.setAttribute('opacity', (o.z > 0 ? 1 : 0.4).toFixed(2));
+    if (o.it.line) { o.it.line.setAttribute('x2', o.x.toFixed(1)); o.it.line.setAttribute('y2', o.y.toFixed(1)); o.it.line.setAttribute('opacity', (o.z > 0 ? 0.9 : 0.35).toFixed(2)); }
+    o.it.g.parentNode.appendChild(o.it.g);   // el de davant, a sobre
+  }
+}
+
 // Mostra versió a la capçalera
 const _vEl = document.getElementById('appVersion');
 if (_vEl) _vEl.textContent = 'v' + APP_VERSION;
@@ -4560,6 +4705,8 @@ try { initCmdLine(); } catch(e) { console.error('initCmdLine() crashed:', e); }
 try { initEditor2DUI(); } catch(e) { console.error('initEditor2DUI() crashed:', e); }
 try { initTopUI(); } catch(e) { console.error('initTopUI() crashed:', e); }
 try { initDiagUI(); } catch(e) { console.error('initDiagUI() crashed:', e); }
+try { initGizmo(); } catch(e) { console.error('initGizmo() crashed:', e); }
+try { _translateUI(); } catch(e) { console.error('_translateUI() crashed:', e); }
 // Restaura la sessió anterior (núvols + dibuix) — F5 no perd el treball
 try { restoreSession(); } catch(e) { console.error('restoreSession() crashed:', e); _sessionReady = true; }
 // Desat de darrera hora en tancar/refrescar (captura moviments/transformacions no desats)
