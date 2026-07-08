@@ -5,7 +5,7 @@ import { TransformControls } from './jsm/controls/TransformControls.js';
 import { loadPLY, loadXYZ } from './loaders/pointcloud_loaders.js';
 
 // ── Versió i feature flags ────────────────────────────────────────────────────
-const APP_VERSION = '2.20.0';
+const APP_VERSION = '2.21.0';
 const FEATURES = {
   segmentacioSemantica: false,  // RANSAC + classificació per tipus
   completatBuits:       false,  // omplir forats basant-se en semàntica
@@ -552,14 +552,26 @@ function adaptPointSize(cloud) {
 // Clipping en temps real
 // ─────────────────────────────────────────────
 function updateClipPlanes() {
+  // IMPORTANT: NO fer `material.needsUpdate = true` cada frame — recompila el
+  // shader a cada fotograma i deixa la navegació lenta quan hi ha caixa de tall.
+  // Es creen els plans un sol cop i després es MUTEN in-place (sense recompilar);
+  // només es marca needsUpdate quan canvia el NOMBRE de plans (activa/desactiva clipping).
   clouds.forEach(cloud => {
+    const mat = cloud.material;
+    if (!mat) return;
     const box = cloud.userData.clipBox;
-    if (!box) { cloud.material.clippingPlanes = []; return; }
+    if (!box) {
+      if (mat.clippingPlanes && mat.clippingPlanes.length) { mat.clippingPlanes = []; mat.needsUpdate = true; }
+      return;
+    }
     box.updateMatrixWorld(true);
-    cloud.material.clippingPlanes = LOCAL_CLIP_PLANES.map(p =>
-      p.clone().applyMatrix4(box.matrixWorld)
-    );
-    cloud.material.needsUpdate = true;
+    if (!mat.clippingPlanes || mat.clippingPlanes.length !== LOCAL_CLIP_PLANES.length) {
+      mat.clippingPlanes = LOCAL_CLIP_PLANES.map(() => new THREE.Plane());
+      mat.needsUpdate = true;   // només quan (re)apareix el clipping
+    }
+    for (let i = 0; i < LOCAL_CLIP_PLANES.length; i++) {
+      mat.clippingPlanes[i].copy(LOCAL_CLIP_PLANES[i]).applyMatrix4(box.matrixWorld);
+    }
   });
 }
 

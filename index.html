@@ -107,18 +107,18 @@
     .acc-body button.active { background: #3a1e08; border-color: #e07820; color: #f90; }
     .btn-row { display: flex; gap: 5px; }
     .btn-row button { flex: 1; }
-    .btn-green { background: #0e2a18 !important; border-color: #1a6a30 !important; color: #6f6 !important; }
-    .btn-green:hover { background: #143820 !important; }
+    .btn-green { background: #1b1f29 !important; border-color: #262b38 !important; color: #c4ccda !important; }
+    .btn-green:hover { background: #e07820 !important; border-color: #e07820 !important; color: #fff !important; }
     .trace-layer-row { display:flex; gap:4px; margin-bottom:6px; }
     .trace-btn { flex:1; font-size:10px; padding:4px 2px; background:#1a1d28; border:1px solid #2a2d40; color:#888; border-radius:4px; cursor:pointer; }
     .trace-btn:hover { border-color:#e07820; color:#e07820; }
     .trace-btn.trace-active { background:#1e2a10; border-color:#4a8a20; color:#8f8; }
     #traceToggle.tracing { background:#2a1010; border-color:#8a2020; color:#f66; }
     #viewer.trace-mode { cursor:crosshair !important; }
-    .btn-blue { background: #0d1e38 !important; border-color: #1a4a8a !important; color: #88ccff !important; }
-    .btn-blue:hover { background: #122840 !important; }
-    .btn-red { background: #2a0e0e !important; border-color: #7a1a1a !important; color: #f88 !important; }
-    .btn-red:hover { background: #380e0e !important; }
+    .btn-blue { background: #1b1f29 !important; border-color: #262b38 !important; color: #c4ccda !important; }
+    .btn-blue:hover { background: #e07820 !important; border-color: #e07820 !important; color: #fff !important; }
+    .btn-red { background: #241419 !important; border-color: #3a2027 !important; color: #d59aa6 !important; }
+    .btn-red:hover { background: #7a1a1a !important; border-color: #7a1a1a !important; color: #fff !important; }
     .btn-orange { background: #e07820 !important; border-color: #f08830 !important; color: #fff !important; font-weight: 600 !important; }
     .btn-orange:hover { background: #f08830 !important; }
 
@@ -551,12 +551,12 @@
     /* Botons genèrics dins dels mòduls (base neta) */
     .pal-scroll button, .mod-scroll .acc-body button {
       display: block; width: 100%; margin: 5px 0; padding: 10px 12px;
-      font-size: 12px; font-weight: 500; text-align: left;
+      font-size: 13px; font-weight: 500; text-align: left;
       background: #1b1f29; color: #c4ccda;
       border: 1px solid #262b38; border-radius: 9px;
       cursor: pointer; transition: background .13s, border-color .13s, color .13s;
     }
-    .pal-scroll button:hover, .mod-scroll .acc-body button:hover { background: #222735; border-color: #333b4d; color: #eef2f8; }
+    .pal-scroll button:hover, .mod-scroll .acc-body button:hover { background: #e07820; border-color: #e07820; color: #fff; }
     .pal-scroll .btn-orange { text-align: center; }
 
     /* Modes del DIBUIX: un per fila (icona + text a l'esquerra) */
@@ -566,10 +566,10 @@
       display: flex !important; align-items: center; gap: 10px; width: 100%;
       margin: 0 !important; padding: 10px 12px !important; text-align: left !important;
       background: #1b1f29; color: #c4ccda; border: 1px solid #262b38; border-radius: 9px;
-      cursor: pointer; font-size: 12px; font-weight: 500;
+      cursor: pointer; font-size: 13px; font-weight: 500;
       transition: background .13s, border-color .13s, color .13s;
     }
-    .ed-mode:hover { background: #222735; border-color: #333b4d; color: #eef2f8; }
+    .ed-mode:hover { background: #e07820; border-color: #e07820; color: #fff; }
     .ed-modes.ed-row .ed-mode { flex: 1; justify-content: center; gap: 5px; padding: 8px 4px !important; }
     .ed-mode.active { background: #3a2410 !important; border-color: #e07820 !important; color: #ffb066 !important; }
 
@@ -578,7 +578,7 @@
     .acc-header {
       display: flex; align-items: center; justify-content: space-between;
       padding: 11px 12px; cursor: pointer; border-radius: 9px;
-      font-size: 12px; font-weight: 600; color: #aeb7c6; letter-spacing: .2px;
+      font-size: 13px; font-weight: 600; color: #aeb7c6; letter-spacing: .2px;
       background: #1b1f29; border: 1px solid #262b38; user-select: none;
       transition: background .13s, color .13s;
     }
@@ -746,12 +746,13 @@
         </div>
         <div class="acc-body" id="accAlign-body">
           <div class="btn-row">
-            <button id="align2pt">2 Points</button>
-            <button id="align3pt">3 Points</button>
+            <button id="align2pt">&#9679;&#9679; Alinear 2 punts</button>
+            <button id="align3pt">&#9679;&#9679;&#9679; Alinear 3 punts</button>
           </div>
-          <button id="btnAutoAlign" class="btn-green" style="margin-top:4px">&#127912; Auto-Alinear (Color)</button>
-          <button id="btnICP" class="btn-blue" style="margin-top:3px">&#9881; Ajustar ICP (Fí)</button>
-          <div id="autoAlignPanel">
+          <button id="btnICP" style="margin-top:4px">&#9881; Ajustar ICP (finor)</button>
+          <!-- Auto-Alinear (Color) autònom retirat: ara el color és un reforç de l'alineació per punts -->
+          <button id="btnAutoAlign" style="display:none"></button>
+          <div id="autoAlignPanel" style="display:none">
             <div id="autoAlignResult">...</div>
             <button id="btnApplyAutoAlign" style="display:none">&#10003; Aplicar</button>
             <button id="btnCancelAutoAlign">&#10005; Cancel·lar</button>
@@ -841,8 +842,9 @@
         <button id="toggleMeasure">&#128207; Mesura</button>
         <button id="clearMeasures">&#128465; Cotes</button>
       </div>
-      <button id="mergeScene" class="btn-blue">&#8859; UNIR NÚVOLS (a l'escena)</button>
-      <button id="merge">&#8659; DESCARREGAR XYZ</button>
+      <!-- Unir/Descarregar ja són a la barra superior; es mantenen ocults (els criden els botons de dalt) -->
+      <button id="mergeScene" style="display:none">Unir núvols</button>
+      <button id="merge" style="display:none">Descarregar XYZ</button>
       <button id="btnReset">REINICIAR TOT</button>
     </div>
     </div><!-- /controls (mòdul NÚVOL) -->
