@@ -5,7 +5,7 @@ import { TransformControls } from './jsm/controls/TransformControls.js';
 import { loadPLY, loadXYZ } from './loaders/pointcloud_loaders.js';
 
 // ── Versió i feature flags ────────────────────────────────────────────────────
-const APP_VERSION = '2.22.0';
+const APP_VERSION = '2.22.1';
 const FEATURES = {
   segmentacioSemantica: false,  // RANSAC + classificació per tipus
   completatBuits:       false,  // omplir forats basant-se en semàntica
@@ -3317,7 +3317,8 @@ function _serializeCloud(cloud) {
     name: cloud.name || 'Núvol',
     visible: cloud.visible !== false,
     matrix: Array.from(cloud.matrix.elements),
-    size: cloud.material?.size || 0.025,
+    size: cloud.material?.size ?? 3,
+    sizeAttenuation: cloud.material?.sizeAttenuation ?? false,   // clau: sense això els punts es veien com a blobs de món
     pos: pos ? pos.array.slice(0) : null,
     col: col ? col.array.slice(0) : null,
   };
@@ -3332,7 +3333,7 @@ function _deserializeCloud(d) {
     g.setAttribute('color', new THREE.BufferAttribute(colArr, 3));
   }
   g.computeBoundingBox(); g.computeBoundingSphere();
-  const mat = new THREE.PointsMaterial({ size: d.size || 0.025, vertexColors: hasCol, color: hasCol ? 0xffffff : 0xcccccc });
+  const mat = new THREE.PointsMaterial({ size: d.size ?? 3, sizeAttenuation: d.sizeAttenuation ?? false, vertexColors: hasCol, color: hasCol ? 0xffffff : 0xcccccc });
   const cloud = new THREE.Points(g, mat);
   cloud.name = d.name || 'Núvol';
   cloud.visible = d.visible !== false;
@@ -4084,6 +4085,7 @@ function initTopUI() {
   const setCollapsed = (c) => {
     box?.classList.toggle('collapsed', c);
     reopen?.classList.toggle('show', c);
+    document.getElementById('cmdLine')?.classList.toggle('full', c);   // la línia IA ocupa tot l'ample
   };
   document.getElementById('sideCollapse')?.addEventListener('click', () => setCollapsed(true));
   reopen?.addEventListener('click', () => setCollapsed(false));
