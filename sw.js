@@ -1,6 +1,6 @@
 // Service Worker — Merge Cloud PWA
 // redeploy: re-trigger GitHub Pages (deploy encallat)
-const CACHE = 'mergecloud-v40';
+const CACHE = 'mergecloud-v41';
 
 const ASSETS = [
   './index.html',

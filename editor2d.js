@@ -497,6 +497,9 @@ export function createEditor2D(ctx) {
   // ── Pointer handlers ──────────────────────────────────────────────────────
   function onDown(e) {
     if (!active) return;
+    // Els DITS (touch) no dibuixen: es deixen passar als controls (pan + pinch-zoom).
+    // Dibuixen/editen només l'Apple Pencil ('pen') i el ratolí ('mouse').
+    if (e.pointerType === 'touch') return;
     e.preventDefault();
     e.stopImmediatePropagation();
     const cx = e.clientX, cy = e.clientY;
@@ -619,6 +622,7 @@ export function createEditor2D(ctx) {
 
   function onMove(e) {
     if (!active) return;
+    if (e.pointerType === 'touch') return;   // dits → navegació
     const cx = e.clientX, cy = e.clientY;
 
     if (mode === 'edit') {
@@ -672,8 +676,9 @@ export function createEditor2D(ctx) {
     }
   }
 
-  function onUp() {
+  function onUp(e) {
     if (!active) return;
+    if (e && e.pointerType === 'touch') return;   // dits → navegació
     if (mode === 'select' && boxStart) {
       if (boxNow && (Math.abs(boxNow.x - boxStart.x) > 3 || Math.abs(boxNow.y - boxStart.y) > 3)) finalizeBoxSelect();
       boxStart = null; boxNow = null; hideSelBox();
@@ -861,10 +866,13 @@ export function createEditor2D(ctx) {
       if (b) {
         ctx.setTopView();
         ctx.setControlsEnabled(false);
+        // Navegació tàctil durant el dibuix: els dits fan pan + pinch-zoom (sense rotar)
+        if (ctx.setEditorNav) ctx.setEditorNav(true);
         group.visible = true;
         if (!nodes.length) planeY = null;   // conserva l'alçada del pla entre sessions
         rebuild();
       } else {
+        if (ctx.setEditorNav) ctx.setEditorNav(false);
         ctx.setControlsEnabled(true);
         removePreview();
         drawing = false; freePts = []; dragId = null; hoverId = null;

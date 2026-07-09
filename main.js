@@ -5,7 +5,7 @@ import { TransformControls } from './jsm/controls/TransformControls.js';
 import { loadPLY, loadXYZ } from './loaders/pointcloud_loaders.js';
 
 // ── Versió i feature flags ────────────────────────────────────────────────────
-const APP_VERSION = '2.22.1';
+const APP_VERSION = '2.23.0';
 const FEATURES = {
   segmentacioSemantica: false,  // RANSAC + classificació per tipus
   completatBuits:       false,  // omplir forats basant-se en semàntica
@@ -2907,6 +2907,7 @@ function syncNumericInputs(cloud) {
 // Pointer / raycaster
 // ─────────────────────────────────────────────
 function onPointerDown(event) {
+  if (_ed2dActive) return;   // durant el dibuix, l'editor + navegació tàctil ho gestionen tot
   const ctrl = document.getElementById('controls');
   if (ctrl && (event.target === ctrl || ctrl.contains(event.target))) return;
   if (event.button !== 0) return;
@@ -4050,6 +4051,23 @@ async function _ensureEditor2D() {
       if (orthoControls) orthoControls.enabled = b;
       if (transformControls) transformControls.enabled = b;
     },
+    // Navegació durant el dibuix: amb DITS pan (1) + pinch-zoom (2), sense rotar.
+    // El pen/ratolí els captura l'editor per dibuixar; els dits arriben aquí.
+    setEditorNav: (on) => {
+      if (!orthoControls) return;
+      if (on) {
+        orthoControls.enabled = true;
+        orthoControls.enableRotate = false;
+        orthoControls.enableZoom = true;
+        orthoControls.enablePan = true;
+        orthoControls.touches = { ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_PAN };
+        orthoControls.mouseButtons = { LEFT: null, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
+      } else {
+        orthoControls.enableRotate = true;
+        orthoControls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
+        orthoControls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
+      }
+    },
     getClouds:          () => clouds,
   });
   // restaura el dibuix desat (si n'hi ha)
@@ -4264,7 +4282,7 @@ async function toggleEditor2D() {
     tools.style.display = 'flex';
     btn.textContent = '⏹ Aturar editor';
     btn.classList.add('active');
-    _edSetModeBtn('draw');
+    ed.setMode('select'); _edSetModeBtn('select');   // per defecte, mode selecció (CAD estàndard)
     if (ed.onChange) ed.onChange();
   } else {
     ed.setActive(false);
