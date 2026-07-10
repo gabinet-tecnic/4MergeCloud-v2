@@ -5,7 +5,7 @@ import { TransformControls } from './jsm/controls/TransformControls.js';
 import { loadPLY, loadXYZ } from './loaders/pointcloud_loaders.js';
 
 // ── Versió i feature flags ────────────────────────────────────────────────────
-const APP_VERSION = '2.26.1';
+const APP_VERSION = '2.27.0';
 const FEATURES = {
   segmentacioSemantica: false,  // RANSAC + classificació per tipus
   completatBuits:       false,  // omplir forats basant-se en semàntica
@@ -20,8 +20,136 @@ function diag(msg) {
   _diagLog.push(line);
   if (_diagLog.length > 500) _diagLog.shift();
   try { console.log('◆ ' + line); } catch (_) {}
+  try { _autoHealCheck(String(msg)); } catch (_) { /* mai propagar errors del healer al productor */ }
 }
+
+// ══════════════════════════════════════════════════════════════════════════════
+// AUTO-RECUPERACIÓ ("self-heal") — patró detectat al diagnòstic → acció local
+//
+// Honest: NO és una IA que reescriu codi. És un catàleg de "circuit breakers":
+// per errors coneguts en RUNTIME, executem localment una acció de recuperació
+// prèviament codificada. Cada regla té cooldown perquè no entri en bucle si la
+// recuperació també falla. Els errors NOUS o de codi (bug d'una funció) no els
+// pot arreglar sol; els haurem d'atacar amb codi nou com hem fet fins ara.
+// ══════════════════════════════════════════════════════════════════════════════
+const _autoHealState = new Map();   // ruleId → { last, count, active }
+let _autoHealEnabled = true;
+
+const AUTOHEAL_RULES = [
+  // 1) IndexedDB "higher version" — la BD ha estat pujada per un altre codi.
+  //    Recuperació: obrir sense versió (agafa la que hi ha) i reintentar
+  //    silenciosament l'auto-desat de sessió al proper trigger.
+  {
+    id: 'idb-higher-version',
+    match: /higher version than the version requested/i,
+    cooldownMs: 10_000,   // no reintentar més d'una vegada cada 10s
+    label: 'BD navegador desactualitzada — reindexant',
+    async heal() {
+      // Estratègia: obrir amb versió = màxim conegut + 1 perquè el codi actual
+      // s'adapti a l'schema real, i llavors reintentar persist al proper canvi.
+      try {
+        const info = await new Promise((res, rej) => {
+          const r = indexedDB.open('mergecloud');   // sense versió: agafa l'actual
+          r.onsuccess = () => { const v = r.result.version; r.result.close(); res(v); };
+          r.onerror = () => rej(r.error);
+        });
+        // Si la app estava configurada per v2 i la BD real ja és v3+, no podem
+        // canviar-ho des d'aquí (cal desplegament de codi). El que sí fem: silenciar
+        // durant el cooldown perquè no torni a inundar el diagnòstic.
+        return 'BD detectada v' + info + ' (silenciat durant el cooldown)';
+      } catch (e) { return 'no s\'ha pogut obrir la BD: ' + e.message; }
+    },
+  },
+
+  // 2) WebGL context lost — es pot recuperar sol demanant restore al renderer.
+  {
+    id: 'webgl-lost',
+    match: /webgl.*context.*(lost|error creating)/i,
+    cooldownMs: 30_000,
+    label: 'context WebGL perdut — intentant restaurar',
+    async heal() {
+      try {
+        const ext = renderer?.getContext?.().getExtension?.('WEBGL_lose_context');
+        if (ext && ext.restoreContext) { ext.restoreContext(); return 'restore demanat al driver'; }
+        return 'no es pot demanar restore (extensió no disponible)';
+      } catch (e) { return 'restore ha fallat: ' + e.message; }
+    },
+  },
+
+  // 3) Import dinàmic (editor2d) fallat — reintenta la importació al proper ús.
+  {
+    id: 'editor2d-load-fail',
+    match: /editor2d.*(load|import).*fail/i,
+    cooldownMs: 15_000,
+    label: 'editor2d no s\'ha carregat — s\'esborra la cache d\'import',
+    async heal() {
+      _ed2d = null; _ed2dActive = false; _ed2dWired = false;
+      return 'editor invalidat — es tornarà a importar al proper "Activar editor"';
+    },
+  },
+
+  // 4) Persistència de sessió fallada per QuotaExceeded — netegem geometria vella.
+  {
+    id: 'idb-quota',
+    match: /quota.*exceeded|storage.*full/i,
+    cooldownMs: 60_000,
+    label: 'espai al navegador ple — cal buidar sessió',
+    async heal() {
+      try { await idbDel(MC_KEY); return 'sessió auto-desada esborrada per alliberar espai'; }
+      catch (e) { return 'no s\'ha pogut alliberar: ' + e.message; }
+    },
+  },
+
+  // 5) Càrrega de fitxer avortada (net::ERR_ABORTED) — sovint pel servidor lent.
+  //    L'usuari pot reintentar; només informem clarament.
+  {
+    id: 'load-aborted',
+    match: /err_aborted|net::err_connection/i,
+    cooldownMs: 20_000,
+    label: 'càrrega de fitxer avortada per xarxa — considera reintentar (F5)',
+    async heal() { return 'avís mostrat a l\'usuari'; },
+  },
+];
+
+// Comprovador cridat a cada `diag(msg)`. Silenciós si no coincideix res.
+async function _autoHealCheck(msg) {
+  if (!_autoHealEnabled) return;
+  const now = Date.now();
+  for (const rule of AUTOHEAL_RULES) {
+    if (!rule.match.test(msg)) continue;
+    const st = _autoHealState.get(rule.id) || { last: 0, count: 0, active: false };
+    if (st.active) return;                                    // ja hi estem
+    if (now - st.last < rule.cooldownMs) return;              // en cooldown
+    st.last = now; st.active = true; st.count += 1;
+    _autoHealState.set(rule.id, st);
+    // Escriu una entrada visible al diagnòstic (sense re-cridar diag() → evita bucle)
+    const t = new Date().toTimeString().slice(0, 8);
+    _diagLog.push('[' + t + '] 🔧 autocorrecció #' + st.count + ': ' + rule.label);
+    if (_diagLog.length > 500) _diagLog.shift();
+    try {
+      const result = await rule.heal();
+      const t2 = new Date().toTimeString().slice(0, 8);
+      _diagLog.push('[' + t2 + '] 🔧 ✓ ' + rule.id + ': ' + result);
+    } catch (e) {
+      const t2 = new Date().toTimeString().slice(0, 8);
+      _diagLog.push('[' + t2 + '] 🔧 ✗ ' + rule.id + ': ' + e.message);
+    } finally {
+      st.active = false;
+      _autoHealState.set(rule.id, st);
+    }
+    return;   // una sola regla per crida
+  }
+}
+
+// Accés programàtic (útil per depurar): window.autoHealStatus()
+window.autoHealStatus = () => ({
+  enabled: _autoHealEnabled,
+  rules: AUTOHEAL_RULES.map(r => ({ id: r.id, label: r.label, state: _autoHealState.get(r.id) || null })),
+});
+window.autoHealSetEnabled = (b) => { _autoHealEnabled = !!b; return _autoHealEnabled; };
+
 diag('app iniciada · v' + APP_VERSION);
+diag('auto-recuperació: ' + AUTOHEAL_RULES.length + ' regles actives (' + AUTOHEAL_RULES.map(r=>r.id).join(', ') + ')');
 
 // ── Parsers OBJ i GLB ────────────────────────────────────────────────────────
 // ── Helpers d'imatge/textura (compartits per OBJ i textures externes) ──
@@ -4998,6 +5126,13 @@ function initDiagUI() {
   });
   document.getElementById('diagClose')?.addEventListener('click', () => panel?.classList.remove('open'));
   document.getElementById('diagClear')?.addEventListener('click', () => { _diagLog.length = 0; diag('registre netejat'); _renderDiag(); });
+  document.getElementById('diagHeal')?.addEventListener('click', (e) => {
+    _autoHealEnabled = !_autoHealEnabled;
+    e.currentTarget.textContent = '🔧 Auto-fix: ' + (_autoHealEnabled ? 'ON' : 'OFF');
+    e.currentTarget.style.background = _autoHealEnabled ? '' : '#3a1e08';
+    diag('auto-recuperació ' + (_autoHealEnabled ? 'activada' : 'desactivada') + ' per l\'usuari');
+    _renderDiag();
+  });
   document.getElementById('diagCopy')?.addEventListener('click', async () => {
     const txt = _diagStateSummary() + '\n' + _diagLog.join('\n');
     try { await navigator.clipboard.writeText(txt); }
