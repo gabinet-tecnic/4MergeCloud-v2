@@ -5,7 +5,7 @@ import { TransformControls } from './jsm/controls/TransformControls.js';
 import { loadPLY, loadXYZ } from './loaders/pointcloud_loaders.js';
 
 // ── Versió i feature flags ────────────────────────────────────────────────────
-const APP_VERSION = '2.25.0';
+const APP_VERSION = '2.26.0';
 const FEATURES = {
   segmentacioSemantica: false,  // RANSAC + classificació per tipus
   completatBuits:       false,  // omplir forats basant-se en semàntica
@@ -2123,6 +2123,8 @@ function _applyPick() {
       : 'Cap punt dins del traçat';
     const exportBtn = document.getElementById('btnPickExport');
     if (exportBtn) exportBtn.disabled = totalPicked === 0;
+    const repairBtn = document.getElementById('btnRepairSurface');
+    if (repairBtn) repairBtn.disabled = totalPicked === 0;
     diag('llaç selecció: ' + totalPicked + ' punts en ' + _pickBuffer.clouds.length + ' núvol(s)');
   }, 20);
 }
@@ -2148,6 +2150,252 @@ function _pickClearAll() {
   if (info) info.textContent = n ? 'Selecció esborrada' : '';
   const exportBtn = document.getElementById('btnPickExport');
   if (exportBtn) exportBtn.disabled = true;
+  const repairBtn = document.getElementById('btnRepairSurface');
+  if (repairBtn) repairBtn.disabled = true;
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// REPARAR SUPERFÍCIE (bufada / soroll de paret)
+// Estratègia:
+//   1. Els punts SELECCIONATS són l'error (la bufada).
+//   2. Es pren un ANELL de punts sans just al voltant (buffer exterior en 3D),
+//      que són els que descriuen la geometria REAL de la paret.
+//   3. RANSAC 3D sobre aquest anell → pla amb màxim consens (ignora outliers).
+//   4. Els punts seleccionats es PROJECTEN sobre el pla (col·locats a la
+//      paret real) i es respecten els seus colors. La geometria del núvol es
+//      substitueix i es guarda pushUndo perquè es pugui desfer.
+// ═════════════════════════════════════════════════════════════════════════════
+
+// Ajusta un pla per Kabsch/SVD ràpid (mínims quadrats via matriu covariança)
+// a partir d'un conjunt de punts. Retorna { n:[nx,ny,nz], d } tal que
+// n·x + d = 0. Fallback si els punts són quasi degenerats.
+function _fitPlaneLSQ(pts) {
+  const n = pts.length;
+  if (n < 3) return null;
+  let cx=0, cy=0, cz=0;
+  for (const p of pts) { cx += p[0]; cy += p[1]; cz += p[2]; }
+  cx/=n; cy/=n; cz/=n;
+  let xx=0, xy=0, xz=0, yy=0, yz=0, zz=0;
+  for (const p of pts) {
+    const dx=p[0]-cx, dy=p[1]-cy, dz=p[2]-cz;
+    xx+=dx*dx; xy+=dx*dy; xz+=dx*dz; yy+=dy*dy; yz+=dy*dz; zz+=dz*dz;
+  }
+  const cov = [[xx,xy,xz],[xy,yy,yz],[xz,yz,zz]];
+  const eig = _jacobiEig3(cov);
+  // Vector propi de la MENOR variança = normal del pla
+  let iMin = 0; if (eig.values[1] < eig.values[iMin]) iMin = 1; if (eig.values[2] < eig.values[iMin]) iMin = 2;
+  const nx = eig.vectors[0][iMin], ny = eig.vectors[1][iMin], nz = eig.vectors[2][iMin];
+  const norm = Math.hypot(nx, ny, nz) || 1;
+  const nrm = [nx/norm, ny/norm, nz/norm];
+  const d = -(nrm[0]*cx + nrm[1]*cy + nrm[2]*cz);
+  return { n: nrm, d, centroid: [cx, cy, cz] };
+}
+
+// RANSAC 3D per pla: mostreja 3 punts a l'atzar, ajusta pla, compta inliers
+// (distància < eps). Repeteix i queda't amb el millor. Refina amb LSQ dels inliers.
+function _ransacPlane(worldPts, opts = {}) {
+  const N = worldPts.length;
+  if (N < 8) return null;
+  const iters = opts.iters || 200;
+  const eps   = opts.eps   || _ransacEstimateEps(worldPts);
+  let best = { count: 0, plane: null, inliers: null };
+  for (let it = 0; it < iters; it++) {
+    const i1 = (Math.random()*N)|0, i2 = (Math.random()*N)|0, i3 = (Math.random()*N)|0;
+    if (i1===i2 || i1===i3 || i2===i3) continue;
+    const p1 = worldPts[i1], p2 = worldPts[i2], p3 = worldPts[i3];
+    const e1 = [p2[0]-p1[0], p2[1]-p1[1], p2[2]-p1[2]];
+    const e2 = [p3[0]-p1[0], p3[1]-p1[1], p3[2]-p1[2]];
+    const nx = e1[1]*e2[2]-e1[2]*e2[1];
+    const ny = e1[2]*e2[0]-e1[0]*e2[2];
+    const nz = e1[0]*e2[1]-e1[1]*e2[0];
+    const nl = Math.hypot(nx, ny, nz);
+    if (nl < 1e-9) continue;
+    const nrm = [nx/nl, ny/nl, nz/nl];
+    const d = -(nrm[0]*p1[0] + nrm[1]*p1[1] + nrm[2]*p1[2]);
+    // Comptem inliers
+    let cnt = 0;
+    for (let k = 0; k < N; k++) {
+      const p = worldPts[k];
+      if (Math.abs(nrm[0]*p[0] + nrm[1]*p[1] + nrm[2]*p[2] + d) < eps) cnt++;
+    }
+    if (cnt > best.count) best = { count: cnt, plane: { n: nrm, d } };
+  }
+  if (!best.plane) return null;
+  // Refinament: LSQ sobre TOTS els inliers per estabilitzar la normal
+  const inliers = [];
+  const P = best.plane;
+  for (let k = 0; k < N; k++) {
+    const p = worldPts[k];
+    if (Math.abs(P.n[0]*p[0] + P.n[1]*p[1] + P.n[2]*p[2] + P.d) < eps) inliers.push(p);
+  }
+  const refined = _fitPlaneLSQ(inliers) || P;
+  return { plane: refined, inliers: inliers.length, total: N, eps };
+}
+
+// Estimació d'eps per RANSAC: 10% de la mitjana de distàncies al centroide
+function _ransacEstimateEps(pts) {
+  const n = pts.length; if (!n) return 0.05;
+  let cx=0, cy=0, cz=0;
+  for (const p of pts) { cx += p[0]; cy += p[1]; cz += p[2]; }
+  cx/=n; cy/=n; cz/=n;
+  let s = 0;
+  for (const p of pts) s += Math.hypot(p[0]-cx, p[1]-cy, p[2]-cz);
+  const mean = s / n;
+  return Math.max(0.01, mean * 0.05);
+}
+
+// Anell de punts SANS al voltant de la selecció:
+// per cada punt del núvol NO seleccionat, mira si té algun veí (per hash espacial)
+// que sí estigui seleccionat, dins d'un radi bufferR. Retorna posicions MÓN.
+function _collectHealthyRing(cloud, selectedIdxs, bufferR) {
+  cloud.updateMatrixWorld(true);
+  const mw = cloud.matrixWorld;
+  const pos = cloud.geometry.getAttribute('position');
+  if (!pos) return { ring: [], selWorld: [] };
+
+  // Punts seleccionats en MÓN (per construir el hash)
+  const v = new THREE.Vector3();
+  const selWorld = new Array(selectedIdxs.length);
+  const selSet   = new Set();
+  for (let i = 0; i < selectedIdxs.length; i++) {
+    const idx = selectedIdxs[i];
+    v.set(pos.getX(idx), pos.getY(idx), pos.getZ(idx)).applyMatrix4(mw);
+    selWorld[i] = [v.x, v.y, v.z];
+    selSet.add(idx);
+  }
+  const hash = _buildHash(selWorld.map(p => ({x:p[0], y:p[1], z:p[2]})), bufferR);
+  const cell = bufferR;
+  const r2   = bufferR * bufferR;
+
+  // Cerca als NO seleccionats. Acota amb el mateix hash espacial: només vèrtexs
+  // que la bucket del seu punt sigui adjacent a alguna bucket amb selecció.
+  const ring = [];
+  for (let i = 0; i < pos.count; i++) {
+    if (selSet.has(i)) continue;
+    v.set(pos.getX(i), pos.getY(i), pos.getZ(i)).applyMatrix4(mw);
+    const kx = Math.floor(v.x / cell), ky = Math.floor(v.y / cell), kz = Math.floor(v.z / cell);
+    let nearAny = false;
+    outer:
+    for (let dx=-1; dx<=1 && !nearAny; dx++)
+      for (let dy=-1; dy<=1 && !nearAny; dy++)
+        for (let dz=-1; dz<=1 && !nearAny; dz++) {
+          const bucket = hash.get(`${kx+dx},${ky+dy},${kz+dz}`);
+          if (!bucket) continue;
+          for (const bi of bucket) {
+            const q = selWorld[bi];
+            const d2 = (q[0]-v.x)*(q[0]-v.x) + (q[1]-v.y)*(q[1]-v.y) + (q[2]-v.z)*(q[2]-v.z);
+            if (d2 <= r2) { nearAny = true; break outer; }
+          }
+        }
+    if (nearAny) ring.push([v.x, v.y, v.z]);
+  }
+  return { ring, selWorld, selSet };
+}
+
+// Projecta un punt món sobre un pla { n, d } en la mateixa direcció de la normal
+function _projectOntoPlane(p, plane) {
+  const s = plane.n[0]*p[0] + plane.n[1]*p[1] + plane.n[2]*p[2] + plane.d;
+  return [p[0] - plane.n[0]*s, p[1] - plane.n[1]*s, p[2] - plane.n[2]*s];
+}
+
+// Executa el REPARAT: selecció actual + anell → pla RANSAC → projecta seleccionats
+// sobre el pla i actualitza la geometria de cada núvol involucrat. pushUndo per
+// poder desfer. Restaura els colors originals dels seleccionats (que estaven
+// vermells/grocs pel ressaltat del llaç).
+async function _repairSurface() {
+  const sel = _pickBuffer;
+  if (!sel || !sel.count) { alert('Fes primer una selecció amb el llaç.'); return; }
+
+  const badge = document.getElementById('loadingBadge');
+  if (badge) { badge.style.display = 'block'; badge.textContent = '⏳ Analitzant paret…'; }
+  await new Promise(r => setTimeout(r, 0));
+
+  const info = document.getElementById('pickInfo');
+  const stats = { totalRepaired: 0, ringUsed: 0, resIn: 0, resTot: 0, clouds: 0, mmSaved: 0 };
+
+  for (const cloud of clouds) {
+    const st = _pickState.get(cloud);
+    if (!st || st.indices.length === 0) continue;
+
+    // Amplada del buffer exterior: 3× la mida mitjana de cel·la del núvol
+    // (=aproximadament 3 vèrtexs "sans" al voltant de la selecció)
+    cloud.updateMatrixWorld(true);
+    const bbox = new THREE.Box3().setFromObject(cloud);
+    const dsz = bbox.getSize(new THREE.Vector3()).length() || 1;
+    const bufferR = Math.max(dsz / 200, 0.05);   // ≈ 5cm mínim
+
+    if (badge) badge.textContent = '⏳ Buscant punts sans al voltant…';
+    await new Promise(r => setTimeout(r, 0));
+    const { ring, selWorld } = _collectHealthyRing(cloud, Array.from(st.indices), bufferR);
+    if (ring.length < 12) {
+      diag('reparar: núvol "' + (cloud.name||'Núvol') + '" no té prou punts sans al voltant (' + ring.length + '), s\'omet');
+      continue;
+    }
+
+    if (badge) badge.textContent = '⏳ Ajustant pla (RANSAC)…';
+    await new Promise(r => setTimeout(r, 0));
+    const result = _ransacPlane(ring, { iters: 250 });
+    if (!result || !result.plane) { diag('reparar: RANSAC no convergeix a "' + (cloud.name||'Núvol') + '"'); continue; }
+    const plane = result.plane;
+
+    // Projecta els punts seleccionats sobre el pla, mesura desplaçament mitjà
+    // (per informar), i actualitza la geometria (posicions locals = worldInverse·nova).
+    const pos = cloud.geometry.getAttribute('position');
+    const col = cloud.geometry.getAttribute('color');
+    const mw  = cloud.matrixWorld;
+    const mwI = new THREE.Matrix4().copy(mw).invert();
+    const vLocal = new THREE.Vector3();
+
+    pushUndo(cloud, true);
+
+    let sumShift = 0;
+    for (let i = 0; i < st.indices.length; i++) {
+      const idx = st.indices[i];
+      const wp = selWorld[i];
+      const np = _projectOntoPlane(wp, plane);
+      sumShift += Math.hypot(np[0]-wp[0], np[1]-wp[1], np[2]-wp[2]);
+      vLocal.set(np[0], np[1], np[2]).applyMatrix4(mwI);
+      pos.setXYZ(idx, vLocal.x, vLocal.y, vLocal.z);
+    }
+    pos.needsUpdate = true;
+
+    // Restaura els colors ORIGINALS dels seleccionats (treu el ressaltat vermell)
+    if (col && st.origColors && st.origColors.length === st.indices.length * 3) {
+      for (let i = 0; i < st.indices.length; i++) {
+        const idx = st.indices[i], o = i * 3;
+        col.setXYZ(idx, st.origColors[o], st.origColors[o+1], st.origColors[o+2]);
+      }
+      col.needsUpdate = true;
+    }
+    cloud.geometry.computeBoundingBox();
+    cloud.geometry.computeBoundingSphere();
+    _pickState.delete(cloud);
+
+    stats.totalRepaired += st.indices.length;
+    stats.ringUsed      += ring.length;
+    stats.resIn         += result.inliers;
+    stats.resTot        += result.total;
+    stats.clouds        += 1;
+    stats.mmSaved       += (sumShift / Math.max(1, st.indices.length)) * 1000;
+  }
+
+  if (badge) badge.style.display = 'none';
+  _pickBuffer = { at: null, color: null, count: 0, clouds: [] };
+  const exportBtn = document.getElementById('btnPickExport');
+  if (exportBtn) exportBtn.disabled = true;
+  const repairBtn = document.getElementById('btnRepairSurface');
+  if (repairBtn) repairBtn.disabled = true;
+
+  if (stats.clouds === 0) {
+    if (info) info.textContent = 'No s\'ha pogut reparar cap superfície (poc anell sà o RANSAC no convergeix).';
+    return;
+  }
+  const avgShift = (stats.mmSaved / stats.clouds).toFixed(0);
+  const consens  = Math.round(100 * stats.resIn / Math.max(1, stats.resTot));
+  const msg = '✓ ' + stats.totalRepaired.toLocaleString() + ' punts reparats — anell sà: ' + stats.ringUsed.toLocaleString() +
+              ' pts · RANSAC consens: ' + consens + '% · desplaçament mitjà: ' + avgShift + ' mm';
+  if (info) info.textContent = msg;
+  diag('reparar superfície: ' + msg);
 }
 
 // Copia el JSON al porta-retalls (per enganxar-lo a la IA)
@@ -2323,6 +2571,8 @@ function segApply(label, opts = {}) {
   _pickBuffer = { at: null, color: null, count: 0, clouds: [] };
   const exportBtn = document.getElementById('btnPickExport');
   if (exportBtn) exportBtn.disabled = true;
+  const repairBtn = document.getElementById('btnRepairSurface');
+  if (repairBtn) repairBtn.disabled = true;
   const info = document.getElementById('pickInfo');
   if (info) info.textContent = `✓ ${nWas.toLocaleString()} punts etiquetats com a "${label}" ${opts.correctedFrom ? '(correcció)' : ''}`;
   return nWas;
@@ -3180,6 +3430,13 @@ function setupUI() {
   });
   document.getElementById('btnPickClear')?.addEventListener('click', _pickClearAll);
   document.getElementById('btnPickExport')?.addEventListener('click', _pickExport);
+  document.getElementById('btnRepairSurface')?.addEventListener('click', async () => {
+    const btn = document.getElementById('btnRepairSurface');
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Reparant…'; }
+    try { await _repairSurface(); }
+    catch (e) { diag('⚠ reparar superfície: ' + e.message); alert('Error reparant: ' + e.message); }
+    finally { if (btn) { btn.textContent = '🔧 Reparar Superfície'; btn.disabled = true; } }
+  });
   const _setPickColor = (rgb, btnId) => {
     _pickColor = rgb.slice();
     ['btnPickColorRed','btnPickColorYellow'].forEach(id => document.getElementById(id)?.classList.remove('active'));
