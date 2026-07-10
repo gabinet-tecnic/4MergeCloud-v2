@@ -765,6 +765,27 @@
         </div>
       </div>
 
+      <!-- SELECCIÓ (LLAÇ) — 2D → frustum 3D → punts ressaltats + export IA -->
+      <div class="acc">
+        <div class="acc-header" data-acc="accPick">
+          <span><span class="acc-icon">&#9678;</span>Selecció (llaç)</span>
+          <span class="acc-arrow">&#9654;</span>
+        </div>
+        <div class="acc-body" id="accPick-body">
+          <div style="font-size:11px;color:#889;line-height:1.5;margin-bottom:6px">Dibuixa un traç lliure sobre el visor: els punts que caiguin dins del volum de selecció quedaran ressaltats. Vermell (per defecte) o groc.</div>
+          <div class="btn-row">
+            <button id="btnLassoPick">&#9999; Traçat lliure</button>
+            <button id="btnPickClear">&#10005; Netejar</button>
+          </div>
+          <div class="btn-row" style="margin-top:4px">
+            <button id="btnPickColorRed" class="active" style="flex:1">&#9679; Vermell</button>
+            <button id="btnPickColorYellow" style="flex:1">&#9679; Groc</button>
+          </div>
+          <div id="pickInfo" style="font-size:11px;color:#9cf;line-height:1.4;margin-top:6px;min-height:14px"></div>
+          <button id="btnPickExport" style="margin-top:4px" disabled>&#8659; Copiar per a IA (JSON)</button>
+        </div>
+      </div>
+
       <!-- CLEAN & MARKUP -->
       <div class="acc">
         <div class="acc-header" data-acc="accClean">

@@ -5,7 +5,7 @@ import { TransformControls } from './jsm/controls/TransformControls.js';
 import { loadPLY, loadXYZ } from './loaders/pointcloud_loaders.js';
 
 // ── Versió i feature flags ────────────────────────────────────────────────────
-const APP_VERSION = '2.23.0';
+const APP_VERSION = '2.24.0';
 const FEATURES = {
   segmentacioSemantica: false,  // RANSAC + classificació per tipus
   completatBuits:       false,  // omplir forats basant-se en semàntica
@@ -722,6 +722,8 @@ function resetAll() {
   alignPhase = 'src';
   undoStack.length = 0;
   if (lassoErasing) stopLassoErase();
+  if (_picking) _pickStop();
+  _pickBuffer = { at: null, color: null, count: 0, clouds: [] };
 
   transformControls.detach();
   setMode('none');
@@ -1912,6 +1914,257 @@ function matchFeaturesRANSAC(srcFeats, tgtFeats, maxIter = 400) {
 // ─────────────────────────────────────────────
 // Aplicar tall permanent (crop)
 // ─────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════════
+// SELECCIÓ PER TRAÇAT LLIURE (LLAÇ 2D → FRUSTUM 3D)
+// L'usuari dibuixa un polígon a la pantalla; els punts del núvol la projecció
+// dels quals cau dins del polígon queden RESSALTATS (color per vèrtex) i les
+// seves coordenades + color originals es guarden a _pickBuffer per a la IA.
+// No és destructiu: hi ha "Netejar" i "Copiar per a IA (JSON)".
+// ═════════════════════════════════════════════════════════════════════════════
+
+let _picking       = false;   // llaç de selecció actiu
+let _pickPath      = [];      // punts pantalla del traç (viewer-space)
+let _pickDrawing   = false;
+let _pickW = 1, _pickH = 1;
+let _pickColor     = [1, 0, 0];   // vermell per defecte (RGB 0-1)
+// Estat de selecció per núvol
+// { origColors:Float32Array, indices:Uint32Array }  →  per esborrar i restaurar
+const _pickState  = new WeakMap();
+// Buffer d'exportació IA (tots els núvols)
+let _pickBuffer   = { at: null, color: null, count: 0, clouds: [] };
+
+function _pickCanvas() { return document.getElementById('lassoCanvas'); }
+function _pickVp(clientX, clientY) {
+  const r = document.getElementById('viewer').getBoundingClientRect();
+  return { x: clientX - r.left, y: clientY - r.top };
+}
+function _pickClearOverlay() {
+  const lc = _pickCanvas();
+  lc.getContext('2d').clearRect(0, 0, lc.width, lc.height);
+}
+function _pickIsControlTarget(e) {
+  return e.target && e.target.closest && e.target.closest('#sidebox, #lassoCancel');
+}
+
+function _pickStart() {
+  if (_picking) { _pickStop(); return; }
+  if (lassoErasing) _stopErase();   // no barregem amb l'esborrat
+  _picking = true;
+  _pickPath = []; _pickDrawing = false;
+  transformControls.detach();
+
+  const viewer = document.getElementById('viewer');
+  _pickW = viewer.offsetWidth  || window.innerWidth;
+  _pickH = viewer.offsetHeight || window.innerHeight;
+  const lc = _pickCanvas();
+  lc.width = _pickW; lc.height = _pickH;
+  lc.style.display = 'block';
+
+  const badge = document.getElementById('lassoBadge');
+  if (badge) { badge.textContent = '✏ Selecció per traçat — dibuixa un contorn, deixa anar per aplicar'; badge.style.display = 'block'; badge.style.background = 'rgba(224,120,32,0.92)'; }
+  document.getElementById('lassoCancel').style.display = 'block';
+  document.getElementById('btnLassoPick')?.classList.add('active');
+  viewer.classList.add('lasso-active');
+  if (renderer) renderer.domElement.style.pointerEvents = 'none';
+
+  viewer.addEventListener('pointerdown', _onPickDown, { passive:false });
+  viewer.addEventListener('pointermove', _onPickMove, { passive:false });
+  viewer.addEventListener('pointerup',   _onPickUp,   { passive:false });
+  viewer.addEventListener('pointercancel', _onPickCancel, { passive:false });
+}
+
+function _pickStop() {
+  _picking = false; _pickPath = []; _pickDrawing = false;
+  const viewer = document.getElementById('viewer');
+  viewer.removeEventListener('pointerdown', _onPickDown);
+  viewer.removeEventListener('pointermove', _onPickMove);
+  viewer.removeEventListener('pointerup',   _onPickUp);
+  viewer.removeEventListener('pointercancel', _onPickCancel);
+  if (renderer) renderer.domElement.style.pointerEvents = 'auto';
+  viewer.classList.remove('lasso-active');
+  const lc = _pickCanvas();
+  lc.style.display = 'none';
+  _pickClearOverlay();
+  const badge = document.getElementById('lassoBadge');
+  if (badge) { badge.style.display = 'none'; badge.style.background = ''; }
+  document.getElementById('lassoCancel').style.display = 'none';
+  document.getElementById('btnLassoPick')?.classList.remove('active');
+}
+
+function _onPickDown(e) {
+  if (!_picking || _pickIsControlTarget(e)) return;
+  e.preventDefault(); e.stopPropagation();
+  _pickDrawing = true;
+  _pickPath = [_pickVp(e.clientX, e.clientY)];
+}
+function _onPickMove(e) {
+  if (!_picking || !_pickDrawing) return;
+  e.preventDefault(); e.stopPropagation();
+  _pickPath.push(_pickVp(e.clientX, e.clientY));
+  _drawPickOverlay();
+}
+function _onPickUp(e) {
+  if (!_picking || !_pickDrawing) return;
+  e.preventDefault(); e.stopPropagation();
+  _pickDrawing = false;
+  _applyPick();
+}
+function _onPickCancel() { if (_picking) _pickStop(); }
+
+function _drawPickOverlay() {
+  if (_pickPath.length < 2) return;
+  const lc = _pickCanvas(), ctx = lc.getContext('2d');
+  ctx.clearRect(0, 0, lc.width, lc.height);
+  ctx.beginPath();
+  ctx.moveTo(_pickPath[0].x, _pickPath[0].y);
+  for (let i = 1; i < _pickPath.length; i++) ctx.lineTo(_pickPath[i].x, _pickPath[i].y);
+  ctx.closePath();
+  const [r, g, b] = _pickColor;
+  const rgba = (a) => `rgba(${Math.round(r*255)},${Math.round(g*255)},${Math.round(b*255)},${a})`;
+  ctx.fillStyle = rgba(0.14); ctx.fill();
+  ctx.strokeStyle = rgba(0.95); ctx.lineWidth = 2;
+  ctx.setLineDash([5, 3]); ctx.stroke();
+}
+
+function _pickInPolygon(px, py, poly) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = poly[i].x, yi = poly[i].y, xj = poly[j].x, yj = poly[j].y;
+    if ((yi > py) !== (yj > py) && px < (xj - xi) * (py - yi) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+// Aplica la selecció: projecta cada punt a pantalla, mira si és dins del polígon,
+// pinta el color per vèrtex i guarda posicions+colors originals al _pickBuffer.
+function _applyPick() {
+  if (_pickPath.length < 6) { _pickStop(); return; }
+
+  const W = _pickW, H = _pickH;
+  const activeCam = (useOrtho && orthoCamera) ? orthoCamera : camera;
+  const targets = clouds.filter(c => c.visible);
+  if (targets.length === 0) { _pickStop(); return; }
+
+  const badge = document.getElementById('loadingBadge');
+  if (badge) badge.style.display = 'block';
+
+  const poly = [..._pickPath];
+  _pickStop();   // tanca visualment
+
+  setTimeout(() => {
+    let totalPicked = 0;
+    _pickBuffer = { at: new Date().toISOString(), color: _pickColor.slice(), count: 0, clouds: [] };
+    const vProj = new THREE.Vector3();
+    const [pr, pg, pb] = _pickColor;
+
+    for (const cloud of targets) {
+      cloud.updateMatrixWorld(true);
+      const mw = cloud.matrixWorld;
+      const pos = cloud.geometry.getAttribute('position');
+      let col = cloud.geometry.getAttribute('color');
+      if (!pos) continue;
+
+      // Assegura color-per-vèrtex (si el núvol no en tenia, el creem blanc)
+      if (!col) {
+        const arr = new Float32Array(pos.count * 3).fill(1);
+        cloud.geometry.setAttribute('color', new THREE.BufferAttribute(arr, 3));
+        col = cloud.geometry.getAttribute('color');
+        cloud.material.vertexColors = true;
+        cloud.material.needsUpdate = true;
+      }
+
+      // Estat previ per aquest núvol (per si es torna a seleccionar): restaura colors abans d'aplicar
+      const prev = _pickState.get(cloud);
+      if (prev) {
+        for (let i = 0; i < prev.indices.length; i++) {
+          const idx = prev.indices[i], o = i * 3;
+          col.setXYZ(idx, prev.origColors[o], prev.origColors[o + 1], prev.origColors[o + 2]);
+        }
+      }
+
+      const idxs = [];
+      const worldPoints = [];   // per al _pickBuffer (posicions absolutes)
+      const origColors  = [];   // colors originals (abans de pintar)
+      for (let i = 0; i < pos.count; i++) {
+        const wx = pos.getX(i), wy = pos.getY(i), wz = pos.getZ(i);
+        vProj.set(wx, wy, wz).applyMatrix4(mw).project(activeCam);
+        if (vProj.z > 1 || vProj.z < -1) continue;   // fora del frustum
+        const sx = (vProj.x + 1) / 2 * W;
+        const sy = (1 - vProj.y) / 2 * H;
+        if (!_pickInPolygon(sx, sy, poly)) continue;
+        idxs.push(i);
+        const wp = new THREE.Vector3(wx, wy, wz).applyMatrix4(mw);
+        worldPoints.push({ x: +wp.x.toFixed(4), y: +wp.y.toFixed(4), z: +wp.z.toFixed(4),
+                           r: col.getX(i), g: col.getY(i), b: col.getZ(i) });
+        origColors.push(col.getX(i), col.getY(i), col.getZ(i));
+      }
+
+      if (idxs.length === 0) { _pickState.delete(cloud); continue; }
+
+      // Aplica el color de ressaltat als índexs
+      for (const idx of idxs) col.setXYZ(idx, pr, pg, pb);
+      col.needsUpdate = true;
+
+      _pickState.set(cloud, {
+        origColors: new Float32Array(origColors),
+        indices:    new Uint32Array(idxs),
+      });
+
+      _pickBuffer.clouds.push({ name: cloud.name || 'Núvol', count: idxs.length, points: worldPoints });
+      totalPicked += idxs.length;
+    }
+
+    _pickBuffer.count = totalPicked;
+    if (badge) badge.style.display = 'none';
+
+    const info = document.getElementById('pickInfo');
+    if (info) info.textContent = totalPicked > 0
+      ? `${totalPicked.toLocaleString()} punts seleccionats en ${_pickBuffer.clouds.length} núvol(s)`
+      : 'Cap punt dins del traçat';
+    const exportBtn = document.getElementById('btnPickExport');
+    if (exportBtn) exportBtn.disabled = totalPicked === 0;
+    diag('llaç selecció: ' + totalPicked + ' punts en ' + _pickBuffer.clouds.length + ' núvol(s)');
+  }, 20);
+}
+
+// Restaura els colors originals dels punts seleccionats a tots els núvols.
+function _pickClearAll() {
+  let n = 0;
+  for (const cloud of clouds) {
+    const st = _pickState.get(cloud);
+    if (!st) continue;
+    const col = cloud.geometry.getAttribute('color');
+    if (col) {
+      for (let i = 0; i < st.indices.length; i++) {
+        const idx = st.indices[i], o = i * 3;
+        col.setXYZ(idx, st.origColors[o], st.origColors[o + 1], st.origColors[o + 2]);
+      }
+      col.needsUpdate = true;
+    }
+    _pickState.delete(cloud); n += st.indices.length;
+  }
+  _pickBuffer = { at: null, color: null, count: 0, clouds: [] };
+  const info = document.getElementById('pickInfo');
+  if (info) info.textContent = n ? 'Selecció esborrada' : '';
+  const exportBtn = document.getElementById('btnPickExport');
+  if (exportBtn) exportBtn.disabled = true;
+}
+
+// Copia el JSON al porta-retalls (per enganxar-lo a la IA)
+async function _pickExport() {
+  if (!_pickBuffer.count) return;
+  const json = JSON.stringify(_pickBuffer, null, 2);
+  try { await navigator.clipboard.writeText(json); }
+  catch (_) { const ta = document.createElement('textarea'); ta.value = json; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); }
+  const info = document.getElementById('pickInfo');
+  if (info) info.textContent = `✓ Copiat al porta-retalls (${_pickBuffer.count.toLocaleString()} punts, JSON)`;
+  diag('llaç: JSON copiat (' + _pickBuffer.count + ' punts)');
+}
+
+// Retorna el buffer per accés programàtic (p.ex. des de la línia IA)
+function getPickedPoints() { return _pickBuffer; }
+window.getPickedPoints = getPickedPoints;
+
 // ── Erase tools: rectangle + freehand lasso ──────────────────────────────────
 //
 // eraseMode: null | 'rect' | 'lasso'
@@ -2211,6 +2464,7 @@ function applyLassoErase() { _applyErase(); }
 // Escape per cancel·lar
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && lassoErasing) _stopErase();
+  if (e.key === 'Escape' && _picking) _pickStop();
 });
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -2702,7 +2956,23 @@ function setupUI() {
     cancelAlign();
     _startErase('lasso');
   };
-  document.getElementById('lassoCancel').onclick = _stopErase;
+  document.getElementById('lassoCancel').onclick = () => { if (_picking) _pickStop(); else _stopErase(); };
+
+  // ── Selecció per traçat (llaç → frustum 3D) ──
+  document.getElementById('btnLassoPick')?.addEventListener('click', () => {
+    cancelAlign();
+    if (lassoErasing) _stopErase();
+    _pickStart();
+  });
+  document.getElementById('btnPickClear')?.addEventListener('click', _pickClearAll);
+  document.getElementById('btnPickExport')?.addEventListener('click', _pickExport);
+  const _setPickColor = (rgb, btnId) => {
+    _pickColor = rgb.slice();
+    ['btnPickColorRed','btnPickColorYellow'].forEach(id => document.getElementById(id)?.classList.remove('active'));
+    document.getElementById(btnId)?.classList.add('active');
+  };
+  document.getElementById('btnPickColorRed')?.addEventListener('click',    () => _setPickColor([1, 0.15, 0.15], 'btnPickColorRed'));
+  document.getElementById('btnPickColorYellow')?.addEventListener('click', () => _setPickColor([1, 0.85, 0.15], 'btnPickColorYellow'));
 
   // ── Mode mesura ──
   document.getElementById('toggleMeasure').onclick = () => {
