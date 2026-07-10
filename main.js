@@ -5,7 +5,7 @@ import { TransformControls } from './jsm/controls/TransformControls.js';
 import { loadPLY, loadXYZ } from './loaders/pointcloud_loaders.js';
 
 // ── Versió i feature flags ────────────────────────────────────────────────────
-const APP_VERSION = '2.26.0';
+const APP_VERSION = '2.26.1';
 const FEATURES = {
   segmentacioSemantica: false,  // RANSAC + classificació per tipus
   completatBuits:       false,  // omplir forats basant-se en semàntica
@@ -1310,11 +1310,11 @@ async function refineAlignByColor(srcCloud, tgtCloud, anchorsWorld) {
   const badge = document.getElementById('loadingBadge');
   try {
     const bb = new THREE.Box3().setFromObject(tgtCloud);
-    const diag = bb.getSize(new THREE.Vector3()).length() || 1;
+    const diagLen = bb.getSize(new THREE.Vector3()).length() || 1;   // NO 'diag' — feia shadow de la funció global diag()
     let spread = 0;
     for (let i=0;i<anchorsWorld.length;i++) for (let j=i+1;j<anchorsWorld.length;j++) spread = Math.max(spread, anchorsWorld[i].distanceTo(anchorsWorld[j]));
-    let radius = Math.min(Math.max(spread * 1.4, diag * 0.10), diag * 0.5);
-    if (!(radius > 1e-3)) radius = diag * 0.2;
+    let radius = Math.min(Math.max(spread * 1.4, diagLen * 0.10), diagLen * 0.5);
+    if (!(radius > 1e-3)) radius = diagLen * 0.2;
 
     if (badge) { badge.style.display = 'block'; badge.textContent = '⏳ Afinant amb el color de l\'entorn…'; }
     await new Promise(r => setTimeout(r, 0));
@@ -4059,21 +4059,45 @@ function mergeCloudsInScene() {
   const merged = new THREE.Points(geo, mat);
   merged.name = 'Núvol unit';
 
-  // Treu els originals de l'escena i les llistes; allibera memòria
+  // Desenganxa el gizmo abans de destruir els núvols antics (evita que quedi apuntant a un objecte destruït)
+  if (transformControls) transformControls.detach();
+
+  // Treu els originals de l'escena i les llistes; allibera memòria. També elimina
+  // les seves caixes de tall (si en tenien) i els seus estats de selecció.
   for (const c of list) {
+    // Caixa de tall associada
+    if (c.userData?.clipBox) {
+      const box = c.userData.clipBox;
+      scene.remove(box);
+      box.geometry?.dispose(); box.material?.dispose();
+      const bi = selectableObjects.indexOf(box); if (bi >= 0) selectableObjects.splice(bi, 1);
+      c.userData.clipBox = null;
+      c.userData.boxRelMatrix = null;
+    }
+    // Estat de selecció del llaç per aquest núvol (WeakMap sense referències vives)
+    if (_pickState && _pickState.delete) _pickState.delete(c);
     scene.remove(c);
     const ci = clouds.indexOf(c); if (ci >= 0) clouds.splice(ci, 1);
     const si = selectableObjects.indexOf(c); if (si >= 0) selectableObjects.splice(si, 1);
     c.geometry?.dispose(); c.material?.dispose();
   }
+  // Neteja també la variable global 'selectedCloud' si apuntava a un dels destruïts
+  if (!clouds.includes(selectedCloud)) selectedCloud = null;
 
   adaptPointSize(merged);
   scene.add(merged);
   clouds.push(merged);
   selectableObjects.push(merged);
+  // Enganxa el gizmo al nou núvol en el mode de núvol actiu (translate per defecte)
   selectCloud(merged);
+  if (transformControls) transformControls.setMode(cloudTCMode || 'translate');
+  setMode(cloudTCMode || 'translate');
   updateRaycasterThreshold();
   updateCloudList();
+  // El buffer de selecció del llaç quedaria referint dades ja no vàlides
+  _pickBuffer = { at: null, color: null, count: 0, clouds: [] };
+  const _pxBtn = document.getElementById('btnPickExport'); if (_pxBtn) _pxBtn.disabled = true;
+  const _rBtn  = document.getElementById('btnRepairSurface'); if (_rBtn)  _rBtn.disabled  = true;
   diag('UNIT: ' + list.length + ' núvols → 1 (' + total.toLocaleString() + ' punts)' + (outCol ? ' amb color' : ' sense color'));
   return merged;
 }
@@ -4100,9 +4124,15 @@ const MC_DB = 'mergecloud', MC_STORE = 'session', MC_KEY = 'current';
 let _restoring = false, _persistTimer = null, _sessionReady = false;
 
 function _idb() {
+  // IMPORTANT: v2 (v2.25 va pujar la BD a v2 per afegir el store 'segTrain'
+  // de segmentació IA); si obríem amb v1 llançava "higher version" a cada auto-desat.
   return new Promise((res, rej) => {
-    const r = indexedDB.open(MC_DB, 1);
-    r.onupgradeneeded = () => { const db = r.result; if (!db.objectStoreNames.contains(MC_STORE)) db.createObjectStore(MC_STORE); };
+    const r = indexedDB.open(MC_DB, 2);
+    r.onupgradeneeded = () => {
+      const db = r.result;
+      if (!db.objectStoreNames.contains(MC_STORE)) db.createObjectStore(MC_STORE);
+      if (!db.objectStoreNames.contains('segTrain')) db.createObjectStore('segTrain', { keyPath: 'id' });
+    };
     r.onsuccess = () => res(r.result);
     r.onerror = () => rej(r.error);
   });
