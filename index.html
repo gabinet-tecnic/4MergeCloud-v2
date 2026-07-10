@@ -783,6 +783,49 @@
           </div>
           <div id="pickInfo" style="font-size:11px;color:#9cf;line-height:1.4;margin-top:6px;min-height:14px"></div>
           <button id="btnPickExport" style="margin-top:4px" disabled>&#8659; Copiar per a IA (JSON)</button>
+
+          <!-- SEGMENTACIÓ IA (client + backend provisional) -->
+          <div style="margin-top:10px;border-top:1px solid #262b38;padding-top:10px">
+            <div style="font-size:9px;font-weight:700;color:#556;letter-spacing:1.2px;text-transform:uppercase;margin-bottom:6px">Segmentació IA</div>
+            <div id="segNote" style="font-size:10px;color:#665;background:rgba(224,120,32,0.05);border:1px solid rgba(224,120,32,0.2);border-radius:6px;padding:6px 8px;margin-bottom:6px;line-height:1.4">
+              <b style="color:#e07820">Provisional</b>: classificador heurístic local (no és una IA 3D real). El contracte està preparat per connectar amb SAM3D/PointNet++ el dia que hi hagi endpoint.
+            </div>
+            <button id="btnSegPredict" disabled>&#128270; Identificar objecte</button>
+            <div id="segResult" style="display:none;margin-top:6px;padding:8px 10px;background:#0e1016;border:1px solid #262b38;border-radius:8px">
+              <div style="font-size:10px;color:#889;margin-bottom:4px">Predicció</div>
+              <div id="segLabel" style="font-size:15px;font-weight:700;color:#e07820;letter-spacing:.3px">—</div>
+              <div id="segConf" style="font-size:11px;color:#9cf;margin-top:2px">—</div>
+              <div class="btn-row" style="margin-top:8px">
+                <button id="btnSegConfirm" class="btn-green">&#10003; Correcte</button>
+                <button id="btnSegWrong">&#10005; Incorrecte</button>
+              </div>
+              <div id="segCorrect" style="display:none;margin-top:8px">
+                <div style="font-size:10px;color:#889;margin-bottom:4px">Etiqueta correcta:</div>
+                <select id="segLabelSelect" style="width:100%;background:#0a0c11;color:#cde;border:1px solid #262b38;border-radius:6px;padding:8px;font-size:12px">
+                  <option value="paret">paret</option>
+                  <option value="terra">terra</option>
+                  <option value="sostre">sostre</option>
+                  <option value="porta">porta</option>
+                  <option value="finestra">finestra</option>
+                  <option value="moble">moble</option>
+                  <option value="columna">columna</option>
+                  <option value="sanitari">sanitari</option>
+                  <option value="coberta">coberta</option>
+                  <option value="vegetacio">vegetació</option>
+                  <option value="altres">altres</option>
+                </select>
+                <button id="btnSegSaveCorrection" class="btn-green" style="margin-top:6px">&#10003; Guardar correcció</button>
+              </div>
+            </div>
+            <div style="margin-top:8px">
+              <div style="font-size:10px;color:#556;letter-spacing:.5px;margin-bottom:4px">Dataset local d'entrenament</div>
+              <div id="segTrainInfo" style="font-size:11px;color:#889">0 mostres</div>
+              <div class="btn-row" style="margin-top:4px">
+                <button id="btnSegExport">&#8659; Exportar JSON</button>
+                <button id="btnSegClear" class="btn-red">&#128465; Buidar</button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 

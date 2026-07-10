@@ -5,7 +5,7 @@ import { TransformControls } from './jsm/controls/TransformControls.js';
 import { loadPLY, loadXYZ } from './loaders/pointcloud_loaders.js';
 
 // ── Versió i feature flags ────────────────────────────────────────────────────
-const APP_VERSION = '2.24.0';
+const APP_VERSION = '2.25.0';
 const FEATURES = {
   segmentacioSemantica: false,  // RANSAC + classificació per tipus
   completatBuits:       false,  // omplir forats basant-se en semàntica
@@ -2165,6 +2165,220 @@ async function _pickExport() {
 function getPickedPoints() { return _pickBuffer; }
 window.getPickedPoints = getPickedPoints;
 
+// ═════════════════════════════════════════════════════════════════════════════
+// SEGMENTACIÓ SEMÀNTICA — client + backend provisional (STUB) + dataset local
+//
+// ⚠ AVÍS: aquesta app NO té connexió a un model 3D real (SAM3D, PointNet++…)
+// perquè no en tenim un servei propi. La classificació es fa amb heurístiques
+// senzilles (altura respecte al terra, color mitjà, forma) i està etiquetada
+// com a "provisional" a la UI. El dia que tinguem endpoint real, es canvia
+// BACKEND_URL i el contracte de resposta és el mateix.
+// ═════════════════════════════════════════════════════════════════════════════
+
+// Configuració — canviar aquí el dia que tinguem servei real
+const SEG_BACKEND_URL = null;   // p.ex. 'https://api.4mc.example/segment'; null = STUB local
+
+// Categories reconegudes (traducció mostrada a la UI)
+const SEG_LABELS = ['paret', 'terra', 'sostre', 'porta', 'finestra', 'moble', 'columna', 'sanitari', 'coberta', 'vegetacio', 'altres'];
+// Color de classificació per etiqueta (RGB 0-1) — servirà per pintar-los en confirmar
+const SEG_COLORS = {
+  paret:      [0.72, 0.72, 0.75],
+  terra:      [0.55, 0.40, 0.28],
+  sostre:     [0.90, 0.88, 0.85],
+  porta:      [0.85, 0.55, 0.15],
+  finestra:   [0.35, 0.65, 0.90],
+  moble:      [0.65, 0.35, 0.20],
+  columna:    [0.60, 0.60, 0.62],
+  sanitari:   [0.90, 0.95, 0.98],
+  coberta:    [0.40, 0.30, 0.25],
+  vegetacio:  [0.35, 0.60, 0.30],
+  altres:     [0.70, 0.30, 0.70],
+};
+
+// ── STUB: classificador heurístic (provisional) ──────────────────────────────
+// Rep la selecció actual (_pickBuffer) i retorna la mateixa forma que el
+// backend real ha de tornar: { label, confidence, provisional, alternatives }.
+function _segStubClassify(sel) {
+  const pts = sel.clouds.flatMap(c => c.points);
+  if (pts.length === 0) return { label: 'altres', confidence: 0, provisional: true, alternatives: [] };
+
+  // Estadística bàsica
+  let minY = Infinity, maxY = -Infinity, minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  let sr = 0, sg = 0, sb = 0;
+  for (const p of pts) {
+    if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+    if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+    if (p.z < minZ) minZ = p.z; if (p.z > maxZ) maxZ = p.z;
+    sr += p.r; sg += p.g; sb += p.b;
+  }
+  const n = pts.length;
+  const rr = sr/n, gg = sg/n, bb = sb/n;
+  const dx = maxX - minX, dy = maxY - minY, dz = maxZ - minZ;
+  const luma = 0.299*rr + 0.587*gg + 0.114*bb;
+
+  // Terra de referència = el mínim Y global dels núvols carregats (fallback: minY de la selecció)
+  let floorY = minY;
+  const bboxAll = _cloudWorldBBox && _cloudWorldBBox();
+  if (bboxAll) floorY = bboxAll.min.y;
+  const relY = (minY + maxY) / 2 - floorY;         // altura mitjana sobre el terra
+  const totalH = bboxAll ? (bboxAll.max.y - bboxAll.min.y) : Math.max(dy, 1);
+
+  // Puntuació per etiqueta (heurística — declaradament simple)
+  const score = {};
+  for (const L of SEG_LABELS) score[L] = 0;
+
+  // Horitzontal molt pla i a baix → terra
+  if (dy < 0.1 && relY < totalH * 0.1) score.terra += 0.9;
+  // Horitzontal molt pla i a dalt → sostre / coberta
+  if (dy < 0.1 && relY > totalH * 0.85) { score.sostre += 0.7; score.coberta += 0.55; }
+  // Vertical prim (una cara), altura mitjana i llum grisa → paret
+  const isVertical = dy > 0.6 && Math.min(dx, dz) < 0.15;
+  if (isVertical && luma > 0.35 && luma < 0.85) score.paret += 0.75;
+  // Vertical i amb amplada 0.6–1.1 m i altura ~1.9–2.2 → porta (guanya la paret per aquesta franja concreta)
+  const width = Math.max(dx, dz);
+  if (isVertical && width > 0.55 && width < 1.2 && dy > 1.7 && dy < 2.3) score.porta += 0.85;
+  // Vertical i amb amplada > 0.6 i altura < 1.6 → finestra
+  if (isVertical && width > 0.5 && dy > 0.5 && dy < 1.6 && bb > rr) score.finestra += 0.55;
+  // Volum compacte (0.3–2 m) i colors saturats → moble
+  const bulky = Math.min(dx, dy, dz) > 0.25 && Math.max(dx, dy, dz) < 2.5;
+  const chroma = Math.max(rr, gg, bb) - Math.min(rr, gg, bb);
+  if (bulky && (chroma > 0.15 || luma < 0.35)) score.moble += 0.55;
+  // Vertical alt i simètric → columna
+  if (isVertical && Math.abs(dx - dz) < 0.2 && dy > totalH * 0.6) score.columna += 0.6;
+  // Blanc molt lluminós i volum petit → sanitari (heurística molt feble)
+  if (luma > 0.85 && bulky) score.sanitari += 0.4;
+  // Verd → vegetació
+  if (gg > rr + 0.05 && gg > bb + 0.05) score.vegetacio += 0.55;
+
+  // "altres" sempre té una base mínima
+  score.altres = 0.15;
+
+  // Escull el guanyador
+  const ranked = Object.entries(score).sort((a, b) => b[1] - a[1]);
+  const [best, bestScore] = ranked[0];
+  // Confidence: mai més de 0.75 (és heurístic, no cal donar falsa seguretat)
+  const confidence = Math.max(0.2, Math.min(0.75, bestScore));
+  const alternatives = ranked.slice(1, 4).map(([lab, s]) => ({ label: lab, confidence: Math.min(0.6, Math.max(0.1, s)) }));
+
+  return { label: best, confidence, provisional: true, alternatives };
+}
+
+// Prediu la classe de la selecció actual (backend real si BACKEND_URL, si no stub)
+async function segPredict() {
+  const sel = _pickBuffer;
+  if (!sel || !sel.count) return null;
+  if (SEG_BACKEND_URL) {
+    try {
+      const resp = await fetch(SEG_BACKEND_URL, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ points: sel.clouds.flatMap(c => c.points).map(p => [p.x, p.y, p.z, p.r, p.g, p.b]) }),
+      });
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      return await resp.json();   // { label, confidence, provisional?, alternatives? }
+    } catch (e) { diag('⚠ segment backend fallat, uso stub: ' + e.message); return _segStubClassify(sel); }
+  }
+  return _segStubClassify(sel);
+}
+
+// ── Aplicació de la classificació al núvol ───────────────────────────────────
+// Pinta els punts seleccionats amb el color de la categoria i marca les seves
+// etiquetes semàntiques al núvol (userData.semantic). Es guarda una entrada
+// pel dataset local d'entrenament.
+function segApply(label, opts = {}) {
+  const sel = _pickBuffer;
+  if (!sel || !sel.count) return 0;
+  const rgb = SEG_COLORS[label] || SEG_COLORS.altres;
+  const meta = { label, ts: Date.now(), correctedFrom: opts.correctedFrom || null };
+
+  for (const cloud of clouds) {
+    const st = _pickState.get(cloud);
+    if (!st) continue;
+    const col = cloud.geometry.getAttribute('color');
+    if (!col) continue;
+    // Pinta els punts amb el color de la categoria
+    for (let i = 0; i < st.indices.length; i++) {
+      const idx = st.indices[i];
+      col.setXYZ(idx, rgb[0], rgb[1], rgb[2]);
+    }
+    col.needsUpdate = true;
+    // Guarda l'etiqueta per índex al userData (metadades semàntiques del núvol)
+    if (!cloud.userData.semantic) cloud.userData.semantic = new Map();
+    for (let i = 0; i < st.indices.length; i++) cloud.userData.semantic.set(st.indices[i], meta);
+    // La selecció ja no és "vermell reversible": es converteix en assignació definitiva
+    _pickState.delete(cloud);
+  }
+
+  // Dataset local (train store)
+  segTrainSave({
+    id: 'seg_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+    at: new Date().toISOString(),
+    label,
+    correctedFrom: opts.correctedFrom || null,
+    source: opts.source || (opts.correctedFrom ? 'user_correction' : 'user_confirmation'),
+    count: sel.count,
+    clouds: sel.clouds.map(c => ({ name: c.name, count: c.count, points: c.points })),   // punts en món amb r,g,b originals
+  }).catch(e => diag('⚠ segTrainSave: ' + e.message));
+
+  const nWas = sel.count;
+  _pickBuffer = { at: null, color: null, count: 0, clouds: [] };
+  const exportBtn = document.getElementById('btnPickExport');
+  if (exportBtn) exportBtn.disabled = true;
+  const info = document.getElementById('pickInfo');
+  if (info) info.textContent = `✓ ${nWas.toLocaleString()} punts etiquetats com a "${label}" ${opts.correctedFrom ? '(correcció)' : ''}`;
+  return nWas;
+}
+
+// ── Dataset local d'entrenament (IndexedDB store 'segTrain') ─────────────────
+const SEG_DB = 'mergecloud', SEG_STORE = 'segTrain';
+function _segTrainDb() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open(SEG_DB, 2);
+    r.onupgradeneeded = () => {
+      const db = r.result;
+      if (!db.objectStoreNames.contains('session')) db.createObjectStore('session');   // reutilitza l'store existent
+      if (!db.objectStoreNames.contains(SEG_STORE)) db.createObjectStore(SEG_STORE, { keyPath: 'id' });
+    };
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+async function segTrainSave(entry) {
+  const db = await _segTrainDb();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(SEG_STORE, 'readwrite');
+    tx.objectStore(SEG_STORE).put(entry);
+    tx.oncomplete = () => res(entry.id); tx.onerror = () => rej(tx.error);
+  });
+}
+async function segTrainList() {
+  const db = await _segTrainDb();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(SEG_STORE, 'readonly');
+    const rq = tx.objectStore(SEG_STORE).getAll();
+    rq.onsuccess = () => res(rq.result || []); rq.onerror = () => rej(rq.error);
+  });
+}
+async function segTrainClear() {
+  const db = await _segTrainDb();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(SEG_STORE, 'readwrite');
+    tx.objectStore(SEG_STORE).clear();
+    tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error);
+  });
+}
+async function segTrainExport() {
+  const list = await segTrainList();
+  const bundle = { format: '4mc-segment-training', version: 1, at: new Date().toISOString(), count: list.length, samples: list };
+  const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'segment_training_' + new Date().toISOString().slice(0, 10) + '.json';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  return list.length;
+}
+window.segTrainList = segTrainList;   // accés programàtic
+
 // ── Erase tools: rectangle + freehand lasso ──────────────────────────────────
 //
 // eraseMode: null | 'rect' | 'lasso'
@@ -2973,6 +3187,77 @@ function setupUI() {
   };
   document.getElementById('btnPickColorRed')?.addEventListener('click',    () => _setPickColor([1, 0.15, 0.15], 'btnPickColorRed'));
   document.getElementById('btnPickColorYellow')?.addEventListener('click', () => _setPickColor([1, 0.85, 0.15], 'btnPickColorYellow'));
+
+  // ── Segmentació semàntica (client + STUB) ──
+  let _lastPred = null;   // última predicció (per corregir/confirmar)
+  const $ = (id) => document.getElementById(id);
+  const _segShowResult = (pred) => {
+    _lastPred = pred;
+    $('segLabel').textContent = pred.label + (pred.provisional ? ' (provisional)' : '');
+    $('segConf').textContent = 'Confiança: ' + Math.round((pred.confidence || 0) * 100) + '% · font: ' + (SEG_BACKEND_URL ? 'backend' : 'stub heurístic');
+    $('segResult').style.display = 'block';
+    $('segCorrect').style.display = 'none';
+    if (pred.label) $('segLabelSelect').value = pred.label;
+  };
+  const _segRefreshTrainInfo = async () => {
+    try { const list = await segTrainList(); const el = $('segTrainInfo'); if (el) el.textContent = list.length + ' mostres · ' + list.reduce((a,e)=>a+(e.count||0),0).toLocaleString() + ' punts'; } catch(_){}
+  };
+
+  $('btnSegPredict')?.addEventListener('click', async () => {
+    const sel = _pickBuffer;
+    if (!sel || !sel.count) { alert('Fes primer una selecció amb el llaç.'); return; }
+    $('btnSegPredict').disabled = true;
+    $('btnSegPredict').textContent = '⏳ Analitzant…';
+    try {
+      const pred = await segPredict();
+      if (pred) _segShowResult(pred);
+    } catch (e) { diag('⚠ segPredict: ' + e.message); alert('Error a la predicció: ' + e.message); }
+    finally { $('btnSegPredict').disabled = !_pickBuffer.count; $('btnSegPredict').textContent = '🔎 Identificar objecte'; }
+  });
+
+  $('btnSegConfirm')?.addEventListener('click', async () => {
+    if (!_lastPred) return;
+    segApply(_lastPred.label, { source: 'user_confirmation' });
+    $('segResult').style.display = 'none';
+    $('btnSegPredict').disabled = true;
+    _lastPred = null;
+    await _segRefreshTrainInfo();
+  });
+
+  $('btnSegWrong')?.addEventListener('click', () => {
+    $('segCorrect').style.display = 'block';
+  });
+
+  $('btnSegSaveCorrection')?.addEventListener('click', async () => {
+    if (!_lastPred) return;
+    const correct = $('segLabelSelect').value;
+    segApply(correct, { correctedFrom: _lastPred.label, source: 'user_correction' });
+    $('segResult').style.display = 'none';
+    $('btnSegPredict').disabled = true;
+    _lastPred = null;
+    await _segRefreshTrainInfo();
+  });
+
+  $('btnSegExport')?.addEventListener('click', async () => {
+    try { const n = await segTrainExport(); diag('dataset exportat: ' + n + ' mostres'); }
+    catch (e) { alert('Export ha fallat: ' + e.message); }
+  });
+
+  $('btnSegClear')?.addEventListener('click', async () => {
+    if (!confirm('Buidar el dataset local d\'entrenament? Aquesta acció no es pot desfer.')) return;
+    try { await segTrainClear(); await _segRefreshTrainInfo(); diag('dataset buidat'); }
+    catch (e) { alert('No s\'ha pogut buidar: ' + e.message); }
+  });
+
+  // Activa/desactiva "Identificar objecte" a mesura que hi ha o no selecció
+  const _origPickInfo = new MutationObserver(() => {
+    const has = !!(_pickBuffer && _pickBuffer.count);
+    const btn = $('btnSegPredict'); if (btn) btn.disabled = !has;
+  });
+  const infoEl = $('pickInfo'); if (infoEl) _origPickInfo.observe(infoEl, { childList: true, characterData: true, subtree: true });
+
+  // Compte inicial
+  _segRefreshTrainInfo();
 
   // ── Mode mesura ──
   document.getElementById('toggleMeasure').onclick = () => {
