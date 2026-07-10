@@ -5,7 +5,7 @@ import { TransformControls } from './jsm/controls/TransformControls.js';
 import { loadPLY, loadXYZ } from './loaders/pointcloud_loaders.js';
 
 // ── Versió i feature flags ────────────────────────────────────────────────────
-const APP_VERSION = '2.27.0';
+const APP_VERSION = '2.28.0';
 const FEATURES = {
   segmentacioSemantica: false,  // RANSAC + classificació per tipus
   completatBuits:       false,  // omplir forats basant-se en semàntica
@@ -427,7 +427,7 @@ const T = (window.APP_LANG === 'en') ? {
   resetConfirm:   'Delete all clouds, clipping boxes and measurements?',
   alignPick:      n    => `${n}-point alignment — click the cloud to move · ESC to cancel`,
   alignSrc:       (c, t) => `SOURCE point ${c}/${t} — click the selected cloud · ESC to cancel`,
-  alignTgt:       (c, t) => `TARGET point ${c}/${t} — click the reference cloud · ESC to cancel`,
+  alignTgt:       (c, t) => `TARGET point ${c}/${t} — click a reference cloud OR a DXF vertex · ESC to cancel`,
   needTwoClouds:  'Load at least 2 clouds to use alignment.',
 } : {
   noCloudLoaded:  'Primer carrega un núvol.',
@@ -438,7 +438,7 @@ const T = (window.APP_LANG === 'en') ? {
   resetConfirm:   'Esborrar tots els núvols, caixes de tall i cotes?',
   alignPick:      n    => `Alineació ${n}pt — fes clic al núvol que vols moure · ESC per cancel·lar`,
   alignSrc:       (c, t) => `Punt ORIGEN ${c}/${t} — fes clic al núvol seleccionat · ESC per cancel·lar`,
-  alignTgt:       (c, t) => `Punt DESTÍ ${c}/${t} — fes clic al núvol de referència · ESC per cancel·lar`,
+  alignTgt:       (c, t) => `Punt DESTÍ ${c}/${t} — clica un núvol de referència O un vèrtex del DXF · ESC per cancel·lar`,
   needTwoClouds:  'Cal tenir almenys 2 núvols carregats per alinear.',
 };
 
@@ -997,7 +997,8 @@ function handleAlignClick(pWorld, cloud) {
     return;
   }
 
-  if (cloud === alignSrcCloud) {
+  // cloud pot ser NULL si el clic ha vingut del DXF (snap a un vèrtex de línia)
+  if (cloud && cloud === alignSrcCloud) {
     const badge = document.getElementById('alignBadge');
     if (badge) {
       const prev = badge.style.background;
@@ -1006,14 +1007,15 @@ function handleAlignClick(pWorld, cloud) {
     }
     return;
   }
+  const isDxf = !cloud;
   const m = new THREE.Mesh(
     new THREE.SphereGeometry(markerR * 2, 8, 8),
-    new THREE.MeshBasicMaterial({ color: 0x00cc44, depthTest: false })
+    new THREE.MeshBasicMaterial({ color: isDxf ? 0x00ccff : 0x00cc44, depthTest: false }),   // cian si ve del DXF, verd si és núvol
   );
   m.position.copy(pWorld);
   scene.add(m); alignMarkers.push(m);
   alignTgtPts.push(pWorld.clone());
-  if (!alignTgtCloud) alignTgtCloud = cloud;
+  if (!alignTgtCloud) alignTgtCloud = cloud;   // pot quedar null si tots els tgt són del DXF (refineAlignByColor ho ignorarà)
 
   if (alignTgtPts.length === alignMode) {
     // captura referències abans que cancelAlign() netegi l'estat
@@ -3846,6 +3848,58 @@ function syncNumericInputs(cloud) {
 // ─────────────────────────────────────────────
 // Pointer / raycaster
 // ─────────────────────────────────────────────
+// ── Picking sobre DXF amb SNAP al vèrtex més proper ──────────────────────────
+// El DXF són línies primes: clicar-les amb precisió és impossible sense ajuda.
+// Per a l'alineació, el que necessitem són VÈRTEXS clau (cantonades, extrems,
+// nodes de polilínia). Aquesta funció:
+//   1. Fa raycast amb un threshold ample sobre les LineSegments dels overlays.
+//   2. Si toca una línia, cerca el vèrtex (extrem d'algun segment) més proper al
+//      punt d'intersecció i el retorna en coordenades món.
+//   3. Si no toca cap línia, també cerca directament el vèrtex més proper a la
+//      posició del ratolí (en pantalla) — útil per clicar cantonades a l'aire.
+function _dxfPickWithSnap(mouseNdc, cam) {
+  const visibles = dxfOverlays.filter(o => o.visible);
+  if (!visibles.length) return null;
+
+  const groups = visibles.map(o => o.group);
+  const prevLine = raycaster.params.Line?.threshold;
+  // Threshold generós — el DXF és fi, però amb el snap trobem el vèrtex igual
+  const camScale = cam.isOrthographicCamera ? (cam.top - cam.bottom) / (cam.zoom || 1) : 1;
+  raycaster.params.Line = { threshold: Math.max(0.05, camScale * 0.02) };
+  const hits = raycaster.intersectObjects(groups, true);
+  if (prevLine != null) raycaster.params.Line.threshold = prevLine;
+
+  // Cerca del vèrtex més proper (dels LineSegments/Points de tots els overlays visibles)
+  const rect = renderer.domElement.getBoundingClientRect();
+  const mouseScreen = { x: (mouseNdc.x * 0.5 + 0.5) * rect.width, y: (1 - (mouseNdc.y * 0.5 + 0.5)) * rect.height };
+  let best = null, bestDist2 = Infinity;
+  const vTmp = new THREE.Vector3();
+  const worldToScreen = (v) => {
+    const p = v.clone().project(cam);
+    return { x: (p.x * 0.5 + 0.5) * rect.width, y: (1 - (p.y * 0.5 + 0.5)) * rect.height };
+  };
+  const HIT_PX = 32;   // radi de captura per snap (px)
+  for (const ov of visibles) {
+    ov.group.updateMatrixWorld(true);
+    const mw = ov.group.matrixWorld;
+    ov.group.traverse(obj => {
+      if (!obj.geometry || !obj.geometry.attributes || !obj.geometry.attributes.position) return;
+      const pos = obj.geometry.attributes.position;
+      for (let i = 0; i < pos.count; i++) {
+        vTmp.set(pos.getX(i), pos.getY(i), pos.getZ(i)).applyMatrix4(mw);
+        const s = worldToScreen(vTmp);
+        const dx = s.x - mouseScreen.x, dy = s.y - mouseScreen.y;
+        const d2 = dx*dx + dy*dy;
+        if (d2 < bestDist2 && d2 < HIT_PX*HIT_PX) { bestDist2 = d2; best = vTmp.clone(); }
+      }
+    });
+  }
+  if (best) return best;
+  // Fallback: si hi ha hit de línia (però cap vèrtex a prop), retorna el punt de tall exacte
+  if (hits.length > 0) return hits[0].point.clone();
+  return null;
+}
+
 function onPointerDown(event) {
   if (_ed2dActive) return;   // durant el dibuix, l'editor + navegació tàctil ho gestionen tot
   const ctrl = document.getElementById('controls');
@@ -3862,18 +3916,26 @@ function onPointerDown(event) {
   // ── Mode alineació ──
   if (alignMode) {
     raycaster.setFromCamera(mouse, activeCam);
+    // 1r intent: raycast contra els núvols de punts
     const hits = raycaster.intersectObjects(clouds, false);
-    if (hits.length === 0) return;
-    const hit = hits[0];
-    let pWorld;
-    if (hit.index != null && hit.object.geometry?.attributes?.position) {
-      pWorld = new THREE.Vector3()
-        .fromBufferAttribute(hit.object.geometry.attributes.position, hit.index)
-        .applyMatrix4(hit.object.matrixWorld);
-    } else {
-      pWorld = hit.point.clone();
+    if (hits.length > 0) {
+      const hit = hits[0];
+      let pWorld;
+      if (hit.index != null && hit.object.geometry?.attributes?.position) {
+        pWorld = new THREE.Vector3()
+          .fromBufferAttribute(hit.object.geometry.attributes.position, hit.index)
+          .applyMatrix4(hit.object.matrixWorld);
+      } else {
+        pWorld = hit.point.clone();
+      }
+      handleAlignClick(pWorld, hit.object);
+      return;
     }
-    handleAlignClick(pWorld, hit.object);
+    // 2n intent (només fase 'tgt'): raycast contra el DXF amb snap al vèrtex més proper
+    if (alignPhase === 'tgt' && dxfOverlays.length > 0) {
+      const pDxf = _dxfPickWithSnap(mouse, activeCam);
+      if (pDxf) { handleAlignClick(pDxf, null); return; }   // null = origen DXF (no cloud)
+    }
     return;
   }
 
