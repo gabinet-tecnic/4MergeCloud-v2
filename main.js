@@ -5,7 +5,7 @@ import { TransformControls } from './jsm/controls/TransformControls.js';
 import { loadPLY, loadXYZ } from './loaders/pointcloud_loaders.js';
 
 // ── Versió i feature flags ────────────────────────────────────────────────────
-const APP_VERSION = '2.29.0';
+const APP_VERSION = '2.30.0';
 const FEATURES = {
   segmentacioSemantica: false,  // RANSAC + classificació per tipus
   completatBuits:       false,  // omplir forats basant-se en semàntica
@@ -920,14 +920,46 @@ function activate3DView() {
 // ─────────────────────────────────────────────
 function startAlign(n) {
   if (measuring) return;
-  if (clouds.length < 2) { alert(T.needTwoClouds); return; }
+  const hasDXF = dxfOverlays.some(o => o.visible);
+  // Necessitem 2 núvols O (1 núvol + un DXF de referència visible)
+  if (clouds.length < 2 && !(clouds.length === 1 && hasDXF)) {
+    alert(hasDXF
+      ? (window.APP_LANG === 'en'
+         ? 'Load at least 1 point cloud to align it against the DXF.'
+         : 'Cal carregar almenys 1 núvol de punts per alinear-lo contra el DXF.')
+      : T.needTwoClouds);
+    return;
+  }
   alignMode  = n;
-  alignPhase = 'pickCloud';
   alignSrcPts = []; alignTgtPts = [];
   alignSrcCloud = null; alignTgtCloud = null;
   clearAlignMarkers();
   transformControls.detach();
   setMode('align');
+  // Si només hi ha 1 núvol, l'agafem directament (no cal triar-lo) i saltem a fase 'src'
+  if (clouds.length === 1) {
+    alignSrcCloud = clouds[0];
+    selectCloud(alignSrcCloud);
+    alignPhase = 'src';
+  } else {
+    alignPhase = 'pickCloud';
+  }
+  // Missatge inicial explicatiu (curt) amb els passos
+  const tip = window.APP_LANG === 'en'
+    ? `Aligning by ${n} points: 1) click ${n} points on the CLOUD (source). 2) click the SAME ${n} points on the ${hasDXF ? 'DXF (snaps to vertices) or another reference cloud' : 'reference cloud'}. ESC to cancel.`
+    : `Alineació ${n} punts: 1) clica ${n} punts al NÚVOL (origen). 2) clica els MATEIXOS ${n} punts al ${hasDXF ? 'DXF (fa snap a vèrtexs) o a un núvol de referència' : 'núvol de referència'}. ESC per cancel·lar.`;
+  diag('alineació iniciada · ' + n + 'pt · ' + (hasDXF ? 'DXF disponible' : 'sense DXF'));
+  const badge = document.getElementById('alignBadge');
+  if (badge) {
+    badge.textContent = tip;
+    badge.style.display = 'block';
+    badge.style.maxWidth = '90vw';
+    badge.style.whiteSpace = 'normal';
+    badge.style.lineHeight = '1.4';
+    badge.style.padding = '8px 14px';
+    // Refresca amb el text curt de fase després de 3.5s per no molestar
+    setTimeout(() => updateAlignBadge(), 3500);
+  }
   updateAlignBadge();
 }
 

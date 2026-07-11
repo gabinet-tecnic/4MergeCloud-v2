@@ -353,25 +353,53 @@ export function createEditor2D(ctx) {
     return best;
   }
 
-  // intersecció (XZ) de les rectes infinites p1-p2 i p3-p4, o null si paral·leles
-  function lineIntersect(p1, p2, p3, p4) {
-    const den = (p1.x - p2.x) * (p3.z - p4.z) - (p1.z - p2.z) * (p3.x - p4.x);
-    if (Math.abs(den) < 1e-9) return null;
-    const t = ((p1.x - p3.x) * (p3.z - p4.z) - (p1.z - p3.z) * (p3.x - p4.x)) / den;
-    return { x: p1.x + t * (p2.x - p1.x), z: p1.z + t * (p2.z - p1.z) };
+  // ── Pla de treball actual: retorna els 2 eixos ACTIUS (u, v) i el bloquejat (w) ──
+  // Perquè perímetre, tallar/allargar/empalmar i snapping funcionin a QUALSEVOL vista
+  // ortogonal (planta XZ, alçat frontal XY, alçat lateral YZ), tot es calcula amb
+  // dinàmicament aquests eixos en lloc de fixar (x, z) com fa la planta.
+  function _planeAxes() {
+    const v = ctx.getViewPlane ? ctx.getViewPlane() : 'top';
+    if (v === 'front') return { u: 'x', v: 'y', w: 'z' };   // pla vertical XY
+    if (v === 'side')  return { u: 'y', v: 'z', w: 'x' };   // pla vertical YZ
+    return { u: 'x', v: 'z', w: 'y' };                       // planta XZ (defecte)
   }
 
-  // node extrem d'una paret més proper a un punt món
+  // intersecció de les rectes infinites p1-p2 i p3-p4 al pla actiu, o null si paral·leles
+  function lineIntersect(p1, p2, p3, p4) {
+    const { u, v } = _planeAxes();
+    const den = (p1[u] - p2[u]) * (p3[v] - p4[v]) - (p1[v] - p2[v]) * (p3[u] - p4[u]);
+    if (Math.abs(den) < 1e-9) return null;
+    const t = ((p1[u] - p3[u]) * (p3[v] - p4[v]) - (p1[v] - p3[v]) * (p3[u] - p4[u])) / den;
+    const out = { x: p1.x, y: p1.y, z: p1.z };   // manté l'eix bloquejat del punt de partida
+    out[u] = p1[u] + t * (p2[u] - p1[u]);
+    out[v] = p1[v] + t * (p2[v] - p1[v]);
+    return out;
+  }
+
+  // node extrem d'una paret més proper a un punt món (al pla actiu)
   function nearestEndNode(w, p) {
     const a = findNode(w.a), b = findNode(w.b);
-    const da = Math.hypot(a.x - p.x, a.z - p.z);
-    const db = Math.hypot(b.x - p.x, b.z - p.z);
+    const { u, v } = _planeAxes();
+    const da = Math.hypot(a[u] - p[u], a[v] - p[v]);
+    const db = Math.hypot(b[u] - p[u], b[v] - p[v]);
     return da <= db ? w.a : w.b;
   }
 
-  function moveNode(id, x, z) {
+  // Mou un node a una posició del pla actiu. Accepta o bé 2 escalars (compat.
+  // amb planta clàssica: x, z) o un punt {x,y,z}. La coord de l'eix bloquejat
+  // es manté (0 pels alçats · planeY pel pla horitzontal).
+  function moveNode(id, arg1, arg2) {
     const n = findNode(id);
-    if (n) { n.x = x; n.z = z; if (planeY != null) n.y = planeY; }
+    if (!n) return;
+    const { u, v, w } = _planeAxes();
+    if (typeof arg1 === 'object' && arg1 !== null) {
+      n[u] = arg1[u]; n[v] = arg1[v];
+      if (w === 'y' && planeY != null) n.y = planeY; else n[w] = 0;
+    } else {
+      // Legacy: (x, z) en pla de planta
+      n.x = arg1; n.z = arg2;
+      if (planeY != null) n.y = planeY;
+    }
   }
 
   function emitOp(status) { if (api.onOp) api.onOp(status); }
@@ -402,11 +430,12 @@ export function createEditor2D(ctx) {
     scene.add(preview);
   }
 
-  // distància perpendicular (XZ) d'un punt a la recta a-b
+  // distància perpendicular al pla actiu d'un punt a la recta a-b
   function perpDist(p, a, b) {
-    const dx = b.x - a.x, dz = b.z - a.z;
-    const l = Math.hypot(dx, dz) || 1;
-    return Math.abs((p.x - a.x) * dz - (p.z - a.z) * dx) / l;
+    const { u, v } = _planeAxes();
+    const du = b[u] - a[u], dv = b[v] - a[v];
+    const l = Math.hypot(du, dv) || 1;
+    return Math.abs((p[u] - a[u]) * dv - (p[v] - a[v]) * du) / l;
   }
 
   // Douglas-Peucker: redueix un traç a pocs vèrtexs rectes
@@ -428,9 +457,10 @@ export function createEditor2D(ctx) {
 
   // node existent més proper a un punt món (per enganxar extrems), o null
   function nodeNearWorld(p, maxWorld) {
+    const { u, v } = _planeAxes();
     let best = null, bd = maxWorld;
     for (const n of nodes) {
-      const d = Math.hypot(n.x - p.x, n.z - p.z);
+      const d = Math.hypot(n[u] - p[u], n[v] - p[v]);   // distància al pla actiu
       if (d < bd) { bd = d; best = n; }
     }
     return best;
@@ -614,9 +644,15 @@ export function createEditor2D(ctx) {
     // draw / perimeter: inici del traç lliure
     const w = ctx.screenToWorld(cx, cy);
     if (!w) return;
-    if (planeY == null) planeY = w.y; else w.y = planeY;
+    const pa = _planeAxes();
+    // Planta: capturem l'alçada base (planeY). Alçats: la 3a coord ja és 0 pel bloqueig.
+    if (pa.w === 'y') { if (planeY == null) planeY = w.y; else w.y = planeY; }
+    else { w[pa.w] = 0; }
     drawing = true;
-    freePts = [{ x: w.x, y: planeY, z: w.z }];
+    const first = { x: w.x, y: w.y, z: w.z };
+    if (pa.w === 'y') first.y = planeY;
+    else first[pa.w] = 0;
+    freePts = [first];
     try { el().setPointerCapture(e.pointerId); } catch (_) {}
   }
 
@@ -632,7 +668,11 @@ export function createEditor2D(ctx) {
         if (!w) return;
         const n = findNode(dragId);
         if (!n) return;
-        n.x = w.x; if (planeY != null) n.y = planeY; n.z = w.z;
+        // Arrossegar node al pla actiu (les 2 coords lliures; la perpendicular es manté)
+        const pa = _planeAxes();
+        n[pa.u] = w[pa.u]; n[pa.v] = w[pa.v];
+        if (pa.w === 'y' && planeY != null) n.y = planeY;
+        else n[pa.w] = 0;
         rebuild();
       } else {
         const n = nodeAtScreen(cx, cy, SNAP_PX);
@@ -647,8 +687,13 @@ export function createEditor2D(ctx) {
       const w = ctx.screenToWorld(cx, cy);
       if (!w) return;
       const last = freePts[freePts.length - 1];
-      if (Math.hypot(w.x - last.x, w.z - last.z) > FREE_MIN) {
-        freePts.push({ x: w.x, y: planeY, z: w.z });
+      const pa = _planeAxes();
+      if (Math.hypot(w[pa.u] - last[pa.u], w[pa.v] - last[pa.v]) > FREE_MIN) {
+        // Guardem el punt sencer amb la 3a coord bloquejada
+        const pt = { x: w.x, y: w.y, z: w.z };
+        if (pa.w === 'y' && planeY != null) pt.y = planeY;
+        else pt[pa.w] = 0;
+        freePts.push(pt);
         updateFreePreview();
       }
     }
@@ -700,10 +745,11 @@ export function createEditor2D(ctx) {
   function mergeNodeIfOverlap(id) {
     const n = findNode(id);
     if (!n) return;
+    const { u, v } = _planeAxes();
     let target = null, bd = MERGE_R;
     for (const o of nodes) {
       if (o.id === id) continue;
-      const d = Math.hypot(o.x - n.x, o.z - n.z);
+      const d = Math.hypot(o[u] - n[u], o[v] - n[v]);   // distància al pla actiu
       if (d < bd) { bd = d; target = o; }
     }
     if (!target) return;
@@ -729,15 +775,15 @@ export function createEditor2D(ctx) {
     if (!I) { emitOp('Les parets són paral·leles — no es poden ajustar'); return; }
 
     if (op === 'empalme') {
-      const e1 = nearestEndNode(w1, I); moveNode(e1, I.x, I.z);
-      const e2 = nearestEndNode(w2, I); moveNode(e2, I.x, I.z);
+      const e1 = nearestEndNode(w1, I); moveNode(e1, I);
+      const e2 = nearestEndNode(w2, I); moveNode(e2, I);
       mergeNodeIfOverlap(e1);   // fusiona els dos extrems a la cantonada
       emitOp('✓ Empalme fet');
     } else if (op === 'extend') {
-      const e = nearestEndNode(w1, I); moveNode(e, I.x, I.z);   // w1 = paret a allargar
+      const e = nearestEndNode(w1, I); moveNode(e, I);   // w1 = paret a allargar
       emitOp('✓ Paret allargada fins al límit');
     } else if (op === 'trim') {
-      const e = nearestEndNode(w2, pt2); moveNode(e, I.x, I.z); // treu el tros clicat de w2
+      const e = nearestEndNode(w2, pt2); moveNode(e, I); // treu el tros clicat de w2
       emitOp('✓ Paret retallada');
     }
   }
@@ -754,21 +800,26 @@ export function createEditor2D(ctx) {
     const raw = freePts;
     freePts = [];
     if (raw.length < 2) return;
-    // longitud total mínima per descartar tocs accidentals
+    const { u, v, w: wAx } = _planeAxes();
+    // longitud total mínima al pla actiu per descartar tocs accidentals
     let len = 0;
-    for (let i = 1; i < raw.length; i++) len += Math.hypot(raw[i].x - raw[i-1].x, raw[i].z - raw[i-1].z);
+    for (let i = 1; i < raw.length; i++) len += Math.hypot(raw[i][u] - raw[i-1][u], raw[i][v] - raw[i-1][v]);
     if (len < SIMPLIFY * 1.5) return;
 
     const verts = simplify(raw, SIMPLIFY);
     const snapR = SIMPLIFY * 2.5;
-    const ids = verts.map((v, i) => {
+    const ids = verts.map((vt, i) => {
       // enganxa els extrems del traç a nodes existents
       if (i === 0 || i === verts.length - 1) {
-        const near = nodeNearWorld(v, snapR);
+        const near = nodeNearWorld(vt, snapR);
         if (near) return near.id;
       }
       const id = nid++;
-      nodes.push({ id, x: v.x, y: planeY, z: v.z });
+      // Node al pla actiu: 2 coords lliures, la 3a bloquejada (planeY per planta, 0 per alçats)
+      const node = { id, x: 0, y: (planeY != null ? planeY : 0), z: 0 };
+      node[u] = vt[u]; node[v] = vt[v];
+      node[wAx] = (wAx === 'y' && planeY != null) ? planeY : 0;
+      nodes.push(node);
       return id;
     });
     for (let i = 1; i < ids.length; i++) {
