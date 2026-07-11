@@ -5,7 +5,7 @@ import { TransformControls } from './jsm/controls/TransformControls.js';
 import { loadPLY, loadXYZ } from './loaders/pointcloud_loaders.js';
 
 // ── Versió i feature flags ────────────────────────────────────────────────────
-const APP_VERSION = '2.30.0';
+const APP_VERSION = '2.31.0';
 const FEATURES = {
   segmentacioSemantica: false,  // RANSAC + classificació per tipus
   completatBuits:       false,  // omplir forats basant-se en semàntica
@@ -905,6 +905,7 @@ function setOrthoView(dir, up) {
   transformControls.camera = orthoCamera;
 
   document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('ortho-active'));
+  if (typeof logAction === 'function') logAction('view_change', { to: _currentViewLabel() });
 }
 
 function activate3DView() {
@@ -913,6 +914,7 @@ function activate3DView() {
   orthoControls.enabled = false;
   transformControls.camera = camera;
   document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('ortho-active'));
+  if (typeof logAction === 'function') logAction('view_change', { to: '3D' });
 }
 
 // ─────────────────────────────────────────────
@@ -949,6 +951,7 @@ function startAlign(n) {
     ? `Aligning by ${n} points: 1) click ${n} points on the CLOUD (source). 2) click the SAME ${n} points on the ${hasDXF ? 'DXF (snaps to vertices) or another reference cloud' : 'reference cloud'}. ESC to cancel.`
     : `Alineació ${n} punts: 1) clica ${n} punts al NÚVOL (origen). 2) clica els MATEIXOS ${n} punts al ${hasDXF ? 'DXF (fa snap a vèrtexs) o a un núvol de referència' : 'núvol de referència'}. ESC per cancel·lar.`;
   diag('alineació iniciada · ' + n + 'pt · ' + (hasDXF ? 'DXF disponible' : 'sense DXF'));
+  logAction('align_start', { pts: n, hasDXF, singleCloud: clouds.length === 1 });
   const badge = document.getElementById('alignBadge');
   if (badge) {
     badge.textContent = tip;
@@ -2114,6 +2117,7 @@ function _pickStart() {
   _picking = true;
   _pickPath = []; _pickDrawing = false;
   transformControls.detach();
+  logAction('lasso_start', { view: _currentViewLabel() });
 
   const viewer = document.getElementById('viewer');
   _pickW = viewer.offsetWidth  || window.innerWidth;
@@ -2288,6 +2292,7 @@ function _applyPick() {
     const repairBtn = document.getElementById('btnRepairSurface');
     if (repairBtn) repairBtn.disabled = totalPicked === 0;
     diag('llaç selecció: ' + totalPicked + ' punts en ' + _pickBuffer.clouds.length + ' núvol(s)');
+    logAction('lasso_apply', { points: totalPicked, clouds: _pickBuffer.clouds.length, colorHex: _pickColor.map(c=>Math.round(c*255)).join(',') });
   }, 20);
 }
 
@@ -2558,6 +2563,7 @@ async function _repairSurface() {
               ' pts · RANSAC consens: ' + consens + '% · desplaçament mitjà: ' + avgShift + ' mm';
   if (info) info.textContent = msg;
   diag('reparar superfície: ' + msg);
+  logAction('repair_surface', { repaired: stats.totalRepaired, ringPts: stats.ringUsed, consensPct: consens, shiftMm: parseInt(avgShift,10) });
 }
 
 // Copia el JSON al porta-retalls (per enganxar-lo a la IA)
@@ -2677,6 +2683,7 @@ function _segStubClassify(sel) {
 async function segPredict() {
   const sel = _pickBuffer;
   if (!sel || !sel.count) return null;
+  logAction('ia_predict', { points: sel.count, backend: SEG_BACKEND_URL ? 'remote' : 'stub' });
   if (SEG_BACKEND_URL) {
     try {
       const resp = await fetch(SEG_BACKEND_URL, {
@@ -2719,15 +2726,19 @@ function segApply(label, opts = {}) {
   }
 
   // Dataset local (train store)
+  const _labelSource = opts.source || (opts.correctedFrom ? 'user_correction' : 'user_confirmation');
   segTrainSave({
     id: 'seg_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
     at: new Date().toISOString(),
     label,
     correctedFrom: opts.correctedFrom || null,
-    source: opts.source || (opts.correctedFrom ? 'user_correction' : 'user_confirmation'),
+    source: _labelSource,
     count: sel.count,
     clouds: sel.clouds.map(c => ({ name: c.name, count: c.count, points: c.points })),   // punts en món amb r,g,b originals
+    // Historial d'accions immediatament anteriors a l'etiquetat (context per fine-tuning)
+    recentActions: getRecentActions(30),
   }).catch(e => diag('⚠ segTrainSave: ' + e.message));
+  logAction('ia_label_apply', { label, correctedFrom: opts.correctedFrom || null, source: _labelSource, points: sel.count });
 
   const nWas = sel.count;
   _pickBuffer = { at: null, color: null, count: 0, clouds: [] };
@@ -2790,6 +2801,137 @@ async function segTrainExport() {
   return list.length;
 }
 window.segTrainList = segTrainList;   // accés programàtic
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ACTION & CLICK LOGGER (subsistema de registre en temps real)
+//
+// Objectiu: entendre EL FLUX de treball de l'usuari — quines vistes, quins
+// clics, quins modes ha activat abans d'una acció important (p.ex. una
+// correcció d'IA). NO substitueix `diag()`: aquell és per errors i estat;
+// aquest és per COMPORTAMENT.
+//
+// Rendiment: 1 sol addEventListener('click', ..., true) al document (capture),
+// buffer circular in-memory de 500 entrades, persistència debounced (1.5s) a
+// IndexedDB store 'actionLog'. Cap re-render mentre el panell està tancat.
+// ══════════════════════════════════════════════════════════════════════════════
+const _actionLog = [];
+const ACTION_LOG_MAX = 500;
+const ACTION_LOG_STORE = 'actionLog';
+let _actionLogEnabled = true;
+let _actionLogPanelOpen = false;
+let _actionLogPersistTimer = null;
+
+function _currentViewLabel() {
+  if (!useOrtho || !orthoCamera) return '3D';
+  const dir = new THREE.Vector3(); orthoCamera.getWorldDirection(dir);
+  const ax = Math.abs(dir.x), ay = Math.abs(dir.y), az = Math.abs(dir.z);
+  if (ay >= 0.85 && ay > ax && ay > az) return 'PL';   // planta
+  if (az >= 0.85 && az > ax && az > ay) return dir.z < 0 ? 'FR' : 'PO';
+  if (ax >= 0.85 && ax > ay && ax > az) return dir.x < 0 ? 'LD' : 'LE';
+  return 'ortho';
+}
+
+function _actionCtx(extra) {
+  const base = {
+    view: _currentViewLabel(),
+    clouds: clouds.length,
+    selected: _pickBuffer?.count || 0,
+    editor: _ed2dActive || false,
+    lasso: !!_picking,
+    align: !!alignMode,
+  };
+  return extra ? Object.assign(base, extra) : base;
+}
+
+function logAction(type, extra) {
+  if (!_actionLogEnabled) return;
+  const entry = { ts: Date.now(), type: String(type), ctx: _actionCtx(extra) };
+  _actionLog.push(entry);
+  if (_actionLog.length > ACTION_LOG_MAX) _actionLog.shift();
+  clearTimeout(_actionLogPersistTimer);
+  _actionLogPersistTimer = setTimeout(_persistActionLog, 1500);
+  if (_actionLogPanelOpen) _renderActionLog();
+}
+
+async function _persistActionLog() {
+  try {
+    const db = await _idb();
+    return new Promise((res, rej) => {
+      const tx = db.transaction(ACTION_LOG_STORE, 'readwrite');
+      tx.objectStore(ACTION_LOG_STORE).put(_actionLog.slice(), 'current');
+      tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error);
+    });
+  } catch (_) { /* silenciós — el logger no ha de trencar res */ }
+}
+
+async function _restoreActionLog() {
+  try {
+    const db = await _idb();
+    const arr = await new Promise((res, rej) => {
+      const tx = db.transaction(ACTION_LOG_STORE, 'readonly');
+      const rq = tx.objectStore(ACTION_LOG_STORE).get('current');
+      rq.onsuccess = () => res(rq.result); rq.onerror = () => rej(rq.error);
+    });
+    if (Array.isArray(arr)) { _actionLog.length = 0; for (const e of arr) _actionLog.push(e); }
+  } catch (_) {}
+}
+
+function getActionLog() { return _actionLog.slice(); }
+function getRecentActions(n) {
+  const N = Math.max(0, Math.min(n == null ? 30 : n, ACTION_LOG_MAX));
+  return N === 0 ? [] : _actionLog.slice(-N);   // slice(-0) tornaria TOT l'array
+}
+async function clearActionLog() {
+  _actionLog.length = 0;
+  await _persistActionLog();
+  if (_actionLogPanelOpen) _renderActionLog();
+}
+function exportActionLogJSON() {
+  const bundle = { format: '4mc-action-log', version: 1, at: new Date().toISOString(), count: _actionLog.length, actions: _actionLog };
+  const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'action_log_' + new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-') + '.json';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  return _actionLog.length;
+}
+function exportActionLogTXT() {
+  const fmt = e => {
+    const t = new Date(e.ts).toTimeString().slice(0, 8);
+    const ctx = e.ctx ? ' · ' + Object.entries(e.ctx).map(([k,v]) => `${k}=${v}`).join(' ') : '';
+    return `[${t}] ${e.type}${ctx}`;
+  };
+  const txt = _actionLog.map(fmt).join('\n');
+  const blob = new Blob([txt], { type: 'text/plain' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'action_log_' + new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-') + '.txt';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  return _actionLog.length;
+}
+function _renderActionLog() {
+  const body = document.getElementById('diagHistoryBody');
+  if (!body) return;
+  // Renderitzem les darreres 200 accions per no pintar centenars a la vegada
+  const slice = _actionLog.slice(-200);
+  const lines = slice.map(e => {
+    const t = new Date(e.ts).toTimeString().slice(0, 8);
+    const ctx = e.ctx ? ' · ' + Object.entries(e.ctx).filter(([,v])=>v!==null&&v!==false&&v!==0).map(([k,v]) => `${k}=${v}`).join(' ') : '';
+    return `[${t}] ${e.type}${ctx}`;
+  });
+  body.textContent = lines.join('\n');
+  const summary = document.getElementById('diagHistorySummary');
+  if (summary) summary.textContent = 'Historial d\'accions (' + _actionLog.length + ')';
+  // scroll al final
+  body.scrollTop = body.scrollHeight;
+}
+
+// Accés programàtic
+window.getActionLog = getActionLog;
+window.getRecentActions = getRecentActions;
+window.exportActionLogJSON = exportActionLogJSON;
 
 // ── Erase tools: rectangle + freehand lasso ──────────────────────────────────
 //
@@ -3286,6 +3428,7 @@ function setupUI() {
         fitCameraToObject(cloud);
         updateRaycasterThreshold();
         diag('carregat OK: ' + file.name + ' · ' + (cloud.geometry.attributes.position.count) + ' punts · total núvols: ' + clouds.length);
+        logAction('load_file', { name: file.name.slice(0, 40), ext, points: cloud.geometry.attributes.position.count });
       }
     } finally {
       _loading = false;
@@ -4321,6 +4464,7 @@ function mergeCloudsInScene() {
   const _pxBtn = document.getElementById('btnPickExport'); if (_pxBtn) _pxBtn.disabled = true;
   const _rBtn  = document.getElementById('btnRepairSurface'); if (_rBtn)  _rBtn.disabled  = true;
   diag('UNIT: ' + list.length + ' núvols → 1 (' + total.toLocaleString() + ' punts)' + (outCol ? ' amb color' : ' sense color'));
+  logAction('merge_clouds', { count: list.length, totalPoints: total, withColor: !!outCol });
   return merged;
 }
 
@@ -4346,14 +4490,14 @@ const MC_DB = 'mergecloud', MC_STORE = 'session', MC_KEY = 'current';
 let _restoring = false, _persistTimer = null, _sessionReady = false;
 
 function _idb() {
-  // IMPORTANT: v2 (v2.25 va pujar la BD a v2 per afegir el store 'segTrain'
-  // de segmentació IA); si obríem amb v1 llançava "higher version" a cada auto-desat.
+  // Versions: v1=session, v2=+segTrain (v2.25), v3=+actionLog (v2.31)
   return new Promise((res, rej) => {
-    const r = indexedDB.open(MC_DB, 2);
+    const r = indexedDB.open(MC_DB, 3);
     r.onupgradeneeded = () => {
       const db = r.result;
       if (!db.objectStoreNames.contains(MC_STORE)) db.createObjectStore(MC_STORE);
       if (!db.objectStoreNames.contains('segTrain')) db.createObjectStore('segTrain', { keyPath: 'id' });
+      if (!db.objectStoreNames.contains('actionLog')) db.createObjectStore('actionLog');
     };
     r.onsuccess = () => res(r.result);
     r.onerror = () => rej(r.error);
@@ -5261,6 +5405,49 @@ function _renderDiag() {
   const body = document.getElementById('diagBody');
   if (body) body.textContent = _diagStateSummary() + '\n' + _diagLog.join('\n');
 }
+// ── Inicialització del logger d'accions (event delegation global + panell) ──
+function initActionLogger() {
+  // 1 sol listener a nivell de document (capture) — event delegation.
+  // Rendiment: no busca al DOM en cada frame; només s'executa quan hi ha clic.
+  document.addEventListener('click', (e) => {
+    if (!_actionLogEnabled) return;
+    const t = e.target;
+    if (!t || !t.closest) return;
+    // Ignora clics DINS el propi panell d'historial (sinó fem soroll)
+    if (t.closest('#diagHistoryPanel')) return;
+    const btn = t.closest('button');
+    if (btn) {
+      const id = btn.id || null;
+      const label = btn.textContent?.trim().replace(/\s+/g, ' ').slice(0, 40) || null;
+      logAction('click_button', { id, label });
+      return;
+    }
+    const acc = t.closest('.acc-header');
+    if (acc) { logAction('accordion_toggle', { acc: acc.dataset?.acc || null }); return; }
+    const tab = t.closest('.side-tab');
+    if (tab) { logAction('tab_change', { tab: tab.id || tab.textContent?.trim().slice(0, 20) }); return; }
+  }, true);
+
+  // Cablejat dels botons del panell d'historial
+  document.getElementById('btnHistoryCopyJSON')?.addEventListener('click', async () => {
+    const json = JSON.stringify({ format:'4mc-action-log', version:1, at:new Date().toISOString(), count:_actionLog.length, actions:_actionLog }, null, 2);
+    try { await navigator.clipboard.writeText(json); }
+    catch (_) { const ta=document.createElement('textarea'); ta.value=json; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); }
+    diag('historial d\'accions copiat (' + _actionLog.length + ' entrades)');
+  });
+  document.getElementById('btnHistoryExportJSON')?.addEventListener('click', () => { const n = exportActionLogJSON(); diag('historial JSON descarregat (' + n + ')'); });
+  document.getElementById('btnHistoryExportTXT')?.addEventListener('click',  () => { const n = exportActionLogTXT();  diag('historial TXT descarregat (' + n + ')');  });
+  document.getElementById('btnHistoryClear')?.addEventListener('click', async () => {
+    if (!confirm('Buidar l\'historial d\'accions? (no es pot desfer)')) return;
+    await clearActionLog(); diag('historial d\'accions buidat');
+  });
+  // Marca com a obert per activar el render en directe
+  const details = document.getElementById('diagHistoryPanel');
+  if (details) details.addEventListener('toggle', () => { _actionLogPanelOpen = details.open; if (details.open) _renderActionLog(); });
+
+  logAction('app_ready', { version: APP_VERSION });
+}
+
 function initDiagUI() {
   const panel = document.getElementById('diagPanel');
   document.getElementById('tbDiag')?.addEventListener('click', () => {
@@ -5393,6 +5580,7 @@ async function toggleEditor2D() {
 
   _ed2dActive = !_ed2dActive;
   diag('editor ' + (_ed2dActive ? 'ACTIVAT' : 'aturat'));
+  logAction('editor_toggle', { active: _ed2dActive, view: _currentViewLabel() });
   const tools = document.getElementById('editorTools');
   const btn   = document.getElementById('editorLaunchBtn');
 
@@ -5847,9 +6035,11 @@ try { initEditor2DUI(); } catch(e) { console.error('initEditor2DUI() crashed:', 
 try { initTopUI(); } catch(e) { console.error('initTopUI() crashed:', e); }
 try { initDiagUI(); } catch(e) { console.error('initDiagUI() crashed:', e); }
 try { initGizmo(); } catch(e) { console.error('initGizmo() crashed:', e); }
+try { initActionLogger(); } catch(e) { console.error('initActionLogger() crashed:', e); }
 try { _translateUI(); } catch(e) { console.error('_translateUI() crashed:', e); }
 // Restaura la sessió anterior (núvols + dibuix) — F5 no perd el treball
 try { restoreSession(); } catch(e) { console.error('restoreSession() crashed:', e); _sessionReady = true; }
+try { _restoreActionLog(); } catch(e) { console.error('_restoreActionLog() crashed:', e); }
 // Desat de darrera hora en tancar/refrescar (captura moviments/transformacions no desats)
 window.addEventListener('pagehide', () => { try { persistSession(true); } catch(_) {} });
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') { try { persistSession(true); } catch(_) {} } });

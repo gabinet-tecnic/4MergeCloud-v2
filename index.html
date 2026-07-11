@@ -642,6 +642,16 @@
       </div>
     </div>
     <pre id="diagBody"></pre>
+    <details id="diagHistoryPanel" style="border-top:1px solid #2a3145;background:#0a0c14">
+      <summary id="diagHistorySummary" style="padding:8px 12px;font-size:11px;color:#cde;cursor:pointer;user-select:none">&#128203; Historial d'accions (0)</summary>
+      <div id="diagHistoryTools" style="display:flex;gap:6px;padding:6px 12px;flex-wrap:wrap;border-top:1px solid #1e2130">
+        <button id="btnHistoryCopyJSON" style="background:#1a1f2c;color:#cde;border:1px solid #2a3145;border-radius:5px;padding:4px 9px;font-size:10px;cursor:pointer">&#128203; Copiar JSON</button>
+        <button id="btnHistoryExportJSON" style="background:#1a1f2c;color:#cde;border:1px solid #2a3145;border-radius:5px;padding:4px 9px;font-size:10px;cursor:pointer">&#8659; JSON</button>
+        <button id="btnHistoryExportTXT" style="background:#1a1f2c;color:#cde;border:1px solid #2a3145;border-radius:5px;padding:4px 9px;font-size:10px;cursor:pointer">&#8659; TXT</button>
+        <button id="btnHistoryClear" style="background:#241419;color:#d59aa6;border:1px solid #3a2027;border-radius:5px;padding:4px 9px;font-size:10px;cursor:pointer">&#128465; Buidar</button>
+      </div>
+      <pre id="diagHistoryBody" style="margin:0;padding:8px 12px;max-height:35vh;overflow:auto;font-family:'Cascadia Code','Consolas',monospace;font-size:10px;line-height:1.5;color:#9fb0c0;white-space:pre-wrap;word-break:break-word"></pre>
+    </details>
   </div>
 
   <!-- ═══════════════════════════════════════
