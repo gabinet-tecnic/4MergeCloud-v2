@@ -5,7 +5,7 @@ import { TransformControls } from './jsm/controls/TransformControls.js';
 import { loadPLY, loadXYZ } from './loaders/pointcloud_loaders.js';
 
 // ── Versió i feature flags ────────────────────────────────────────────────────
-const APP_VERSION = '2.28.0';
+const APP_VERSION = '2.29.0';
 const FEATURES = {
   segmentacioSemantica: false,  // RANSAC + classificació per tipus
   completatBuits:       false,  // omplir forats basant-se en semàntica
@@ -5040,6 +5040,28 @@ let _aiVoiceRec = null;
 // ─────────────────────────────────────────────
 // Raycast pantalla → món (helper compartit per l'editor de planta)
 // ─────────────────────────────────────────────
+// Detecta si la vista actual és una de les 3 ortogonals principals.
+// Retorna: 'top' | 'front' | 'side' | 'auto' (3D o oblíqua).
+//   top   = mirant amunt/avall (dir dominant en Y) → pla d'edició XZ  → BLOQUEJA Y
+//   front = mirant per Z (dir dominant en Z)       → pla d'edició XY  → BLOQUEJA Z
+//   side  = mirant per X (dir dominant en X)       → pla d'edició YZ  → BLOQUEJA X
+function _getEditorViewPlane() {
+  if (!useOrtho || !orthoCamera) return 'auto';
+  const dir = new THREE.Vector3();
+  orthoCamera.getWorldDirection(dir);
+  const ax = Math.abs(dir.x), ay = Math.abs(dir.y), az = Math.abs(dir.z);
+  const T = 0.85;   // el component dominant ha de ser >85%
+  if (ay >= T && ay > ax && ay > az) return 'top';
+  if (az >= T && az > ax && az > ay) return 'front';
+  if (ax >= T && ax > ay && ax > az) return 'side';
+  return 'auto';
+}
+
+// Trace raycast usat pel mòdul de dibuix (editor2d) i altres eines interactives.
+// Si l'editor 2D està actiu I la vista és una de les 3 ortogonals, aplica
+// BLOQUEIG ESTRICTE 2D: força la coordenada perpendicular al pla de vista a 0
+// (o al valor base actual gestionat per l'editor). Cap coordenada diagonal en
+// la 3a dimensió pot arribar mai a l'editor mentre estàs en una vista plana.
 function _traceRaycast(clientX, clientY) {
   const rect = renderer.domElement.getBoundingClientRect();
   const nx = ((clientX - rect.left) / rect.width)  * 2 - 1;
@@ -5048,9 +5070,34 @@ function _traceRaycast(clientX, clientY) {
   rc.params.Points = { threshold: 0.15 };
   const cam = (useOrtho && orthoCamera) ? orthoCamera : camera;
   rc.setFromCamera(new THREE.Vector2(nx, ny), cam);
+
+  // BLOQUEIG 2D estricte quan l'editor està actiu i la vista és ortogonal
+  const editorPlane = _ed2dActive ? _getEditorViewPlane() : 'auto';
+  if (editorPlane === 'top' || editorPlane === 'front' || editorPlane === 'side') {
+    let normal, axis;
+    if      (editorPlane === 'top')   { normal = new THREE.Vector3(0, 1, 0); axis = 'y'; }
+    else if (editorPlane === 'front') { normal = new THREE.Vector3(0, 0, 1); axis = 'z'; }
+    else                              { normal = new THREE.Vector3(1, 0, 0); axis = 'x'; }
+    // Intent 1: raycast al núvol; si hi ha, agafem la posició PROJECTADA sobre el pla
+    const hits = rc.intersectObjects(clouds, false);
+    let out;
+    if (hits.length > 0) out = hits[0].point.clone();
+    else {
+      // Intent 2: intersecció amb el pla d'edició (que passa per l'origen)
+      const plane = new THREE.Plane(normal, 0);
+      out = new THREE.Vector3();
+      const hit = rc.ray.intersectPlane(plane, out);
+      if (!hit) return null;
+    }
+    // BLOQUEIG ESTRICTE: força EXACTAMENT a 0 la coordenada perpendicular.
+    // Cap deformació diagonal en la 3a dimensió pot escapar.
+    out[axis] = 0;
+    return out;
+  }
+
+  // Comportament original (vista 3D o oblíqua, o editor no actiu)
   const hits = rc.intersectObjects(clouds, false);
   if (hits.length > 0) return hits[0].point.clone();
-  // fallback: project onto the median Y plane of loaded clouds
   let planeY = 0;
   if (clouds.length > 0) {
     const box = new THREE.Box3().setFromObject(clouds[0]);
@@ -5077,6 +5124,9 @@ async function _ensureEditor2D() {
     THREE, scene, renderer,
     screenToWorld:      (x, y) => _traceRaycast(x, y),
     getActiveCamera:    () => (useOrtho && orthoCamera) ? orthoCamera : camera,
+    // Retorna 'top' | 'front' | 'side' | 'auto' — perquè l'editor sàpiga quin eix es bloqueja
+    getViewPlane:       () => _getEditorViewPlane(),
+    // Només força vista de planta si NO hi ha ja una vista ortogonal (permet dibuix en alçats)
     setTopView:         () => { if (!useOrtho) setOrthoView(new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, -1)); },
     setControlsEnabled: (b) => {
       controls.enabled = b;
