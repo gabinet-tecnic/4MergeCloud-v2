@@ -5,7 +5,7 @@ import { TransformControls } from './jsm/controls/TransformControls.js';
 import { loadPLY, loadXYZ } from './loaders/pointcloud_loaders.js';
 
 // ── Versió i feature flags ────────────────────────────────────────────────────
-const APP_VERSION = '2.31.1';
+const APP_VERSION = '2.32.0';
 const FEATURES = {
   segmentacioSemantica: false,  // RANSAC + classificació per tipus
   completatBuits:       false,  // omplir forats basant-se en semàntica
@@ -2139,6 +2139,13 @@ function _pickIsControlTarget(e) {
   return e.target && e.target.closest && e.target.closest('#sidebox, #lassoCancel');
 }
 
+// Estat previ dels controls (per restaurar-los en acabar el llaç)
+let _pickPrevControlsState = null;
+
+// Bloqueig d'events tàctils nadius (iPad Safari: pinch-zoom, panning) durant el llaç.
+// L'usem sobre el viewer, amb passive:false perquè preventDefault sigui efectiu.
+function _pickBlockNativeTouch(e) { if (_picking) { e.preventDefault(); e.stopPropagation(); } }
+
 function _pickStart() {
   if (_picking) { _pickStop(); return; }
   if (lassoErasing) _stopErase();   // no barregem amb l'esborrat
@@ -2146,6 +2153,17 @@ function _pickStart() {
   _pickPath = []; _pickDrawing = false;
   transformControls.detach();
   logAction('lasso_start', { view: _currentViewLabel() });
+
+  // ── FIX iPad: bloqueja OrbitControls per evitar que el dit/Pencil orbiti
+  // la càmera enlloc de dibuixar. Guardem l'estat previ per restaurar-lo.
+  _pickPrevControlsState = {
+    orbit: !!controls?.enabled,
+    ortho: !!orthoControls?.enabled,
+    tc:    !!transformControls?.enabled,
+  };
+  if (controls) controls.enabled = false;
+  if (orthoControls) orthoControls.enabled = false;
+  if (transformControls) transformControls.enabled = false;
 
   const viewer = document.getElementById('viewer');
   _pickW = viewer.offsetWidth  || window.innerWidth;
@@ -2160,11 +2178,19 @@ function _pickStart() {
   document.getElementById('btnLassoPick')?.classList.add('active');
   viewer.classList.add('lasso-active');
   if (renderer) renderer.domElement.style.pointerEvents = 'none';
+  // touch-action:none evita gestures nadius de Safari (pinch-zoom, pan) durant el llaç
+  viewer.style.touchAction = 'none';
 
   viewer.addEventListener('pointerdown', _onPickDown, { passive:false });
   viewer.addEventListener('pointermove', _onPickMove, { passive:false });
   viewer.addEventListener('pointerup',   _onPickUp,   { passive:false });
   viewer.addEventListener('pointercancel', _onPickCancel, { passive:false });
+  // Bloqueig extra dels events tàctils nadius (a Safari, els listeners de OrbitControls
+  // poden intentar processar el touchmove tot i estar disabled)
+  viewer.addEventListener('touchstart', _pickBlockNativeTouch, { passive:false });
+  viewer.addEventListener('touchmove',  _pickBlockNativeTouch, { passive:false });
+  viewer.addEventListener('touchend',   _pickBlockNativeTouch, { passive:false });
+  viewer.addEventListener('gesturestart', _pickBlockNativeTouch, { passive:false });
 }
 
 function _pickStop() {
@@ -2174,7 +2200,12 @@ function _pickStop() {
   viewer.removeEventListener('pointermove', _onPickMove);
   viewer.removeEventListener('pointerup',   _onPickUp);
   viewer.removeEventListener('pointercancel', _onPickCancel);
+  viewer.removeEventListener('touchstart', _pickBlockNativeTouch);
+  viewer.removeEventListener('touchmove',  _pickBlockNativeTouch);
+  viewer.removeEventListener('touchend',   _pickBlockNativeTouch);
+  viewer.removeEventListener('gesturestart', _pickBlockNativeTouch);
   if (renderer) renderer.domElement.style.pointerEvents = 'auto';
+  viewer.style.touchAction = '';
   viewer.classList.remove('lasso-active');
   const lc = _pickCanvas();
   lc.style.display = 'none';
@@ -2183,6 +2214,13 @@ function _pickStop() {
   if (badge) { badge.style.display = 'none'; badge.style.background = ''; }
   document.getElementById('lassoCancel').style.display = 'none';
   document.getElementById('btnLassoPick')?.classList.remove('active');
+  // Restaura l'estat dels controls
+  if (_pickPrevControlsState) {
+    if (controls) controls.enabled = _pickPrevControlsState.orbit;
+    if (orthoControls) orthoControls.enabled = _pickPrevControlsState.ortho;
+    if (transformControls) transformControls.enabled = _pickPrevControlsState.tc;
+    _pickPrevControlsState = null;
+  }
 }
 
 function _onPickDown(e) {
@@ -2319,6 +2357,9 @@ function _applyPick() {
     if (exportBtn) exportBtn.disabled = totalPicked === 0;
     const repairBtn = document.getElementById('btnRepairSurface');
     if (repairBtn) repairBtn.disabled = totalPicked === 0;
+    // Botons "Marcar Pla A/B" — enabled si hi ha selecció d'un núvol
+    const setA = document.getElementById('btnSetPlaneA'); if (setA) setA.disabled = totalPicked === 0;
+    const setB = document.getElementById('btnSetPlaneB'); if (setB) setB.disabled = totalPicked === 0;
     diag('llaç selecció: ' + totalPicked + ' punts en ' + _pickBuffer.clouds.length + ' núvol(s)');
     logAction('lasso_apply', { points: totalPicked, clouds: _pickBuffer.clouds.length, colorHex: _pickColor.map(c=>Math.round(c*255)).join(',') });
   }, 20);
@@ -2592,6 +2633,120 @@ async function _repairSurface() {
   if (info) info.textContent = msg;
   diag('reparar superfície: ' + msg);
   logAction('repair_surface', { repaired: stats.totalRepaired, ringPts: stats.ringUsed, consensPct: consens, shiftMm: parseInt(avgShift,10) });
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// ALINEACIÓ PER PLANS (PARETS)
+// L'usuari selecciona amb el llaç un tros de paret al núvol A i el marca com a
+// "Pla A" (referència). Fa el mateix al núvol B ("Pla B"). Prement "Alinear per
+// Plans" es calcula la transformació rígida (rotació + translació) que fa que
+// el pla B quedi COPLANAR amb A i es transforma el núvol de B en conseqüència.
+// ═════════════════════════════════════════════════════════════════════════════
+let _planeRefA = null;   // { plane:{n,d,centroid}, cloud, count, worldPts }
+let _planeRefB = null;
+
+// Extreu els punts en coordenades MÓN d'un núvol donats els seus índexs locals.
+function _extractWorldPointsFromCloud(cloud, indices) {
+  cloud.updateMatrixWorld(true);
+  const pos = cloud.geometry.getAttribute('position');
+  if (!pos) return [];
+  const mw = cloud.matrixWorld;
+  const v = new THREE.Vector3();
+  const out = new Array(indices.length);
+  for (let i = 0; i < indices.length; i++) {
+    v.set(pos.getX(indices[i]), pos.getY(indices[i]), pos.getZ(indices[i])).applyMatrix4(mw);
+    out[i] = [v.x, v.y, v.z];
+  }
+  return out;
+}
+
+// Ajusta un pla RANSAC a la selecció actual i el marca com A o B.
+function _setPlaneRef(which) {
+  const sel = _pickBuffer;
+  if (!sel || !sel.count) { alert('Fes primer una selecció amb el llaç sobre un tros de paret.'); return; }
+  // Cerca l'entrada amb estat del pickState (=cloud + índexs locals)
+  let targetCloud = null, indices = null;
+  for (const c of clouds) {
+    const st = _pickState.get(c);
+    if (st && st.indices.length) { targetCloud = c; indices = Array.from(st.indices); break; }
+  }
+  if (!targetCloud) { alert('No trobo els punts seleccionats. Torna a fer llaç.'); return; }
+
+  const worldPts = _extractWorldPointsFromCloud(targetCloud, indices);
+  if (worldPts.length < 20) { alert('Selecció massa petita (mín 20 punts).'); return; }
+
+  const res = _ransacPlane(worldPts, { iters: 300 });
+  if (!res || !res.plane) { alert('RANSAC no ha convergit. Prova amb una selecció més gran i més plana.'); return; }
+
+  const ref = { plane: res.plane, cloud: targetCloud, count: worldPts.length, inliers: res.inliers, worldPts };
+  if (which === 'A') _planeRefA = ref; else _planeRefB = ref;
+
+  _updatePlaneRefsUI();
+  logAction('plane_marked', { which, cloud: targetCloud.name || '?', points: worldPts.length, inliers: res.inliers });
+  diag('pla ' + which + ' marcat: núvol "' + (targetCloud.name||'?') + '" · ' + worldPts.length + ' pts · inliers ' + res.inliers);
+}
+
+function _updatePlaneRefsUI() {
+  const info = document.getElementById('planesInfo');
+  const btn = document.getElementById('btnAlignByPlanes');
+  const okA = !!_planeRefA, okB = !!_planeRefB;
+  const bothDifferent = okA && okB && _planeRefA.cloud !== _planeRefB.cloud;
+  if (info) {
+    if (!okA && !okB) info.textContent = 'Selecciona un tros de paret amb el llaç i marca\'l com A. Repeteix al núvol destí per B.';
+    else if (okA && !okB) info.textContent = '✓ Pla A: "' + (_planeRefA.cloud.name||'?') + '" (' + _planeRefA.count + ' pts). Ara marca el B a l\'altre núvol.';
+    else if (!okA && okB) info.textContent = '✓ Pla B: "' + (_planeRefB.cloud.name||'?') + '" (' + _planeRefB.count + ' pts). Marca també A al núvol de referència.';
+    else if (!bothDifferent) info.textContent = '⚠ A i B són del mateix núvol. Marca\'ls a núvols DIFERENTS.';
+    else info.textContent = '✓ Pla A: "' + (_planeRefA.cloud.name||'?') + '" · Pla B: "' + (_planeRefB.cloud.name||'?') + '". Prem "Alinear per Plans".';
+  }
+  if (btn) btn.disabled = !bothDifferent;
+}
+
+function _clearPlaneRefs() {
+  _planeRefA = null; _planeRefB = null;
+  _updatePlaneRefsUI();
+}
+
+// Alinea el núvol del pla B perquè el seu pla quedi COPLANAR amb el pla A.
+// 1) Assegura que les normals apunten al mateix cantó (les girem si cal).
+// 2) Rotació: quaternió que porta nB → nA, aplicada al voltant del CENTROIDE de B
+//    (així el centroide no es mou durant la rotació).
+// 3) Translació: mou el centroide (que ja hi és) a la seva projecció sobre A,
+//    de manera que quedi exactament al pla de A.
+function _alignByPlanes() {
+  if (!_planeRefA || !_planeRefB) return;
+  if (_planeRefA.cloud === _planeRefB.cloud) { alert('A i B són del mateix núvol.'); return; }
+
+  const nA = new THREE.Vector3(_planeRefA.plane.n[0], _planeRefA.plane.n[1], _planeRefA.plane.n[2]).normalize();
+  const nB0 = new THREE.Vector3(_planeRefB.plane.n[0], _planeRefB.plane.n[1], _planeRefB.plane.n[2]).normalize();
+  const nB = nB0.clone();
+  if (nA.dot(nB) < 0) nB.negate();   // les normals RANSAC poden estar antiparal·leles
+
+  const q = new THREE.Quaternion().setFromUnitVectors(nB, nA);
+  const cB = new THREE.Vector3(_planeRefB.plane.centroid[0], _planeRefB.plane.centroid[1], _planeRefB.plane.centroid[2]);
+
+  // Matriu: T(cB) · R(q) · T(-cB) — rotació al voltant del centroide de B
+  const M = new THREE.Matrix4()
+    .makeTranslation(cB.x, cB.y, cB.z)
+    .multiply(new THREE.Matrix4().makeRotationFromQuaternion(q))
+    .multiply(new THREE.Matrix4().makeTranslation(-cB.x, -cB.y, -cB.z));
+
+  // Ara el centroide de B segueix a cB. Calculem la distància signada de cB
+  // al pla A (n·p + d) i traslladem -d*nA per posar-lo exactament sobre A.
+  const dist = nA.dot(cB) + _planeRefA.plane.d;
+  M.premultiply(new THREE.Matrix4().makeTranslation(-nA.x * dist, -nA.y * dist, -nA.z * dist));
+
+  const srcCloud = _planeRefB.cloud;
+  pushUndo(srcCloud);
+  srcCloud.applyMatrix4(M);
+  srcCloud.updateMatrixWorld(true);
+  syncClipBox(srcCloud);
+  selectCloud(srcCloud);
+
+  // Deixem els plans marcats però actualitzem l'estat (per si es vol tornar a intentar)
+  logAction('plane_align_apply', { src: srcCloud.name || '?', dst: _planeRefA.cloud.name || '?', angleDeg: (Math.acos(Math.max(-1, Math.min(1, nA.dot(nB0)))) * 180/Math.PI).toFixed(1), shiftM: Math.abs(dist).toFixed(3) });
+  diag('alineat per plans: ' + (srcCloud.name||'B') + ' → ' + (_planeRefA.cloud.name||'A') + ' · desplaçament ' + Math.abs(dist).toFixed(3) + ' m');
+  const info = document.getElementById('planesInfo');
+  if (info) info.textContent = '✓ Alineat. Fes ICP fi si vols acabar de refinar.';
 }
 
 // Copia el JSON al porta-retalls (per enganxar-lo a la IA)
@@ -3787,6 +3942,18 @@ function setupUI() {
   };
   document.getElementById('btnPickColorRed')?.addEventListener('click',    () => _setPickColor([1, 0.15, 0.15], 'btnPickColorRed'));
   document.getElementById('btnPickColorYellow')?.addEventListener('click', () => _setPickColor([1, 0.85, 0.15], 'btnPickColorYellow'));
+
+  // ── Alineació per Plans (parets) ──
+  document.getElementById('btnSetPlaneA')?.addEventListener('click', () => _setPlaneRef('A'));
+  document.getElementById('btnSetPlaneB')?.addEventListener('click', () => _setPlaneRef('B'));
+  document.getElementById('btnClearPlaneRefs')?.addEventListener('click', _clearPlaneRefs);
+  document.getElementById('btnAlignByPlanes')?.addEventListener('click', () => {
+    const btn = document.getElementById('btnAlignByPlanes');
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Alineant…'; }
+    try { _alignByPlanes(); }
+    catch (e) { diag('⚠ alineació per plans: ' + e.message); alert('Error: ' + e.message); }
+    finally { if (btn) { btn.textContent = '🛠 Alinear per Plans'; _updatePlaneRefsUI(); } }
+  });
 
   // ── Segmentació semàntica (client + STUB) ──
   let _lastPred = null;   // última predicció (per corregir/confirmar)

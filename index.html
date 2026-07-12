@@ -801,6 +801,20 @@
           <button id="btnRepairSurface" style="margin-top:4px" disabled title="Ajusta un pla amb RANSAC a l'anell de punts sans i hi projecta els punts esbiaixats de la selecció">&#128295; Reparar Superfície</button>
           <button id="btnPickExport" style="margin-top:4px" disabled>&#8659; Copiar per a IA (JSON)</button>
 
+          <!-- ALINEACIÓ PER PLANS (parets) — RANSAC + transformació rígida -->
+          <div style="margin-top:10px;border-top:1px solid #262b38;padding-top:10px">
+            <div style="font-size:9px;font-weight:700;color:#556;letter-spacing:1.2px;text-transform:uppercase;margin-bottom:6px">Alineació per Plans</div>
+            <div class="btn-row">
+              <button id="btnSetPlaneA" disabled>&#128204; Marcar Pla A</button>
+              <button id="btnSetPlaneB" disabled>&#128204; Marcar Pla B</button>
+            </div>
+            <div id="planesInfo" style="font-size:10px;color:#889;line-height:1.5;margin-top:6px">Selecciona un tros de paret amb el llaç i marca'l com A. Repeteix al núvol destí per B.</div>
+            <div class="btn-row" style="margin-top:6px">
+              <button id="btnAlignByPlanes" class="btn-green" disabled>&#128736; Alinear per Plans</button>
+              <button id="btnClearPlaneRefs" title="Buida A i B">&#10005;</button>
+            </div>
+          </div>
+
           <!-- SEGMENTACIÓ IA (client + backend provisional) -->
           <div style="margin-top:10px;border-top:1px solid #262b38;padding-top:10px">
             <div style="font-size:9px;font-weight:700;color:#556;letter-spacing:1.2px;text-transform:uppercase;margin-bottom:6px">Segmentació IA</div>
