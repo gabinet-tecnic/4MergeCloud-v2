@@ -12,8 +12,17 @@
   <link rel="apple-touch-icon" href="icons/icon-192.png">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { overflow: hidden; font-family: 'Segoe UI', system-ui, sans-serif; background: #0e1117; color: #c8cad4; overscroll-behavior: none; }
-    canvas { display: block; touch-action: none; position: absolute; top: 0; left: 0; }
+    body {
+      overflow: hidden; font-family: 'Segoe UI', system-ui, sans-serif; background: #0e1117; color: #c8cad4;
+      overscroll-behavior: none;
+      /* iPad: evita que un clic sobre el visor activi la selecció de text nadiva (tot blau) */
+      -webkit-user-select: none; user-select: none;
+      -webkit-touch-callout: none;   /* evita el "callout" del Pencil llarg */
+      -webkit-tap-highlight-color: transparent;
+    }
+    canvas { display: block; touch-action: none; position: absolute; top: 0; left: 0; -webkit-user-select: none; user-select: none; }
+    /* Els inputs, textareas i el textarea del diagnòstic sí han de permetre selecció */
+    input, textarea, .allow-select { -webkit-user-select: text; user-select: text; }
 
     /* ══════════════════════════════════════════
        LEFT PANEL
@@ -1126,14 +1135,17 @@
         </span>
         <button id="cmdToggleBtn">&#9650;</button>
       </div>
-      <!-- API key row - visible when no key saved -->
-      <div id="apiKeyRow" style="display:none; align-items:center; gap:6px; padding:4px 10px; border-bottom:1px solid #1a1d28; background:rgba(224,120,32,0.05); flex-shrink:0;">
+      <!-- API key row — OCULT fins que hi hagi backend real (v2.32.1). Codi conservat entre etiquetes de comentari HTML.
+      <div id="apiKeyRow" style="display:none !important; align-items:center; gap:6px; padding:4px 10px; border-bottom:1px solid #1a1d28; background:rgba(224,120,32,0.05); flex-shrink:0;">
         <span style="font-size:10px; color:#776; flex-shrink:0; white-space:nowrap;">Clau Anthropic API:</span>
         <input type="password" id="apiKeyInput" placeholder="sk-ant-api03-..." autocomplete="off" spellcheck="false"
           style="flex:1; min-width:0; background:#0c0e16; border:1px solid #2a2d40; color:#aaa; font-size:11px; padding:3px 7px; border-radius:3px; font-family:monospace;">
         <button id="apiKeySave" style="font-size:10px; padding:3px 9px; background:#1a2e1a; border:1px solid #2a6a2a; color:#8c8; border-radius:3px; cursor:pointer; white-space:nowrap;">Guardar</button>
         <button id="apiKeySkip" title="Tancar" style="font-size:11px; background:none; border:none; color:#445; cursor:pointer; padding:0 3px;">✕</button>
       </div>
+      -->
+      <!-- Salvaguarda extra: si algun codi crea/mostra apiKeyRow programàticament, aquest CSS el força invisible -->
+      <style>#apiKeyRow { display: none !important; }</style>
       <div id="cmdHistory"></div>
       <div id="cmdInputRow">
         <span class="cmd-prompt">4MC&gt;</span>

@@ -5,7 +5,7 @@ import { TransformControls } from './jsm/controls/TransformControls.js';
 import { loadPLY, loadXYZ } from './loaders/pointcloud_loaders.js';
 
 // ── Versió i feature flags ────────────────────────────────────────────────────
-const APP_VERSION = '2.32.0';
+const APP_VERSION = '2.32.1';
 const FEATURES = {
   segmentacioSemantica: false,  // RANSAC + classificació per tipus
   completatBuits:       false,  // omplir forats basant-se en semàntica
@@ -948,6 +948,9 @@ function activate3DView() {
 // ─────────────────────────────────────────────
 // Alineació estil AutoCAD (2 i 3 punts)
 // ─────────────────────────────────────────────
+// Estat previ dels controls durant l'alineació (per restaurar-los a cancelAlign)
+let _alignPrevControlsState = null;
+
 function startAlign(n) {
   if (measuring) return;
   const hasDXF = dxfOverlays.some(o => o.visible);
@@ -965,6 +968,19 @@ function startAlign(n) {
   alignSrcCloud = null; alignTgtCloud = null;
   clearAlignMarkers();
   transformControls.detach();
+
+  // ── FIX iPad: bloqueja OrbitControls perquè els listeners nadius no
+  // interceptin el clic i puguem detectar els picks amb precisió. Guardem
+  // l'estat previ per restaurar-lo a cancelAlign(). Els gestos de moure la
+  // vista queden bloquejats durant els 2/3 clics — quan es completa
+  // l'alineació, cancelAlign restaura els controls.
+  _alignPrevControlsState = {
+    orbit: !!controls?.enabled,
+    ortho: !!orthoControls?.enabled,
+  };
+  if (controls) controls.enabled = false;
+  if (orthoControls) orthoControls.enabled = false;
+
   setMode('align');
   // Si només hi ha 1 núvol, l'agafem directament (no cal triar-lo) i saltem a fase 'src'
   if (clouds.length === 1) {
@@ -1001,6 +1017,12 @@ function cancelAlign() {
   updateAlignBadge();
   if (selectedCloud) transformControls.attach(selectedCloud);
   setMode(cloudTCMode);
+  // Restaura estat de controls (només si els havíem bloquejat des de startAlign)
+  if (_alignPrevControlsState) {
+    if (controls) controls.enabled = _alignPrevControlsState.orbit;
+    if (orthoControls) orthoControls.enabled = _alignPrevControlsState.ortho;
+    _alignPrevControlsState = null;
+  }
 }
 
 function clearAlignMarkers() {
@@ -2661,16 +2683,37 @@ function _extractWorldPointsFromCloud(cloud, indices) {
 }
 
 // Ajusta un pla RANSAC a la selecció actual i el marca com A o B.
+// PRIORITAT: (1) selectedCloud (el que l'usuari té "actiu"), (2) el núvol que
+// no és ja el pla OPOSAT (evita A i B del mateix núvol), (3) el que té MÉS
+// punts seleccionats (senyal que és el que l'usuari volia).
 function _setPlaneRef(which) {
   const sel = _pickBuffer;
   if (!sel || !sel.count) { alert('Fes primer una selecció amb el llaç sobre un tros de paret.'); return; }
-  // Cerca l'entrada amb estat del pickState (=cloud + índexs locals)
-  let targetCloud = null, indices = null;
+  const otherRef = (which === 'A') ? _planeRefB : _planeRefA;
+
+  // Reculli TOTS els núvols amb selecció, ordenats per nombre de punts (desc)
+  const candidates = [];
   for (const c of clouds) {
     const st = _pickState.get(c);
-    if (st && st.indices.length) { targetCloud = c; indices = Array.from(st.indices); break; }
+    if (st && st.indices.length) candidates.push({ cloud: c, count: st.indices.length });
   }
-  if (!targetCloud) { alert('No trobo els punts seleccionats. Torna a fer llaç.'); return; }
+  if (candidates.length === 0) { alert('No trobo els punts seleccionats. Torna a fer llaç.'); return; }
+  candidates.sort((a, b) => b.count - a.count);
+
+  let targetCloud = null;
+  // 1) selectedCloud amb selecció i que NO és el mateix que l'altre pla marcat
+  if (selectedCloud && candidates.some(x => x.cloud === selectedCloud) && (!otherRef || otherRef.cloud !== selectedCloud)) {
+    targetCloud = selectedCloud;
+  }
+  // 2) primer candidat que no coincideix amb l'altre pla
+  if (!targetCloud && otherRef) {
+    const cand = candidates.find(x => x.cloud !== otherRef.cloud);
+    if (cand) targetCloud = cand.cloud;
+  }
+  // 3) fallback: el que té més punts
+  if (!targetCloud) targetCloud = candidates[0].cloud;
+
+  const indices = Array.from(_pickState.get(targetCloud).indices);
 
   const worldPts = _extractWorldPointsFromCloud(targetCloud, indices);
   if (worldPts.length < 20) { alert('Selecció massa petita (mín 20 punts).'); return; }
@@ -2678,7 +2721,9 @@ function _setPlaneRef(which) {
   const res = _ransacPlane(worldPts, { iters: 300 });
   if (!res || !res.plane) { alert('RANSAC no ha convergit. Prova amb una selecció més gran i més plana.'); return; }
 
-  const ref = { plane: res.plane, cloud: targetCloud, count: worldPts.length, inliers: res.inliers, worldPts };
+  // Guardem els ÍNDEXS locals: si l'usuari mou el núvol abans d'alinear,
+  // podem recalcular el pla amb els punts actuals (no els "congelats").
+  const ref = { plane: res.plane, cloud: targetCloud, count: worldPts.length, inliers: res.inliers, indices: indices.slice() };
   if (which === 'A') _planeRefA = ref; else _planeRefB = ref;
 
   _updatePlaneRefsUI();
@@ -2716,37 +2761,59 @@ function _alignByPlanes() {
   if (!_planeRefA || !_planeRefB) return;
   if (_planeRefA.cloud === _planeRefB.cloud) { alert('A i B són del mateix núvol.'); return; }
 
-  const nA = new THREE.Vector3(_planeRefA.plane.n[0], _planeRefA.plane.n[1], _planeRefA.plane.n[2]).normalize();
-  const nB0 = new THREE.Vector3(_planeRefB.plane.n[0], _planeRefB.plane.n[1], _planeRefB.plane.n[2]).normalize();
-  const nB = nB0.clone();
-  if (nA.dot(nB) < 0) nB.negate();   // les normals RANSAC poden estar antiparal·leles
+  const srcCloud = _planeRefB.cloud;   // NÚVOL MÒBIL (només aquest es transforma)
+  const dstCloud = _planeRefA.cloud;   // NÚVOL FIX (no es toca)
 
+  // ── RECALCUL DELS PLANS AMB POSICIONS ACTUALS ──
+  // Els plans es van guardar en un moment concret; si l'usuari ha mogut algun
+  // núvol entre marcar i alinear, cal recalcular perquè els vectors normals
+  // representin la GEOMETRIA REAL del moment.
+  const wpA = _extractWorldPointsFromCloud(dstCloud, _planeRefA.indices || []);
+  const wpB = _extractWorldPointsFromCloud(srcCloud, _planeRefB.indices || []);
+  if (wpA.length < 20 || wpB.length < 20) { alert('Torna a marcar A i B (selecció perduda).'); return; }
+  const rA = _ransacPlane(wpA, { iters: 300 });
+  const rB = _ransacPlane(wpB, { iters: 300 });
+  if (!rA || !rB) { alert('No he pogut ajustar els plans amb la selecció actual.'); return; }
+  const planeA = rA.plane, planeB = rB.plane;
+
+  // ── VECTORS NORMALS ──
+  const nA = new THREE.Vector3(planeA.n[0], planeA.n[1], planeA.n[2]).normalize();
+  const nBraw = new THREE.Vector3(planeB.n[0], planeB.n[1], planeB.n[2]).normalize();
+  let nB = nBraw.clone();
+  // Alineació de sentits: si les normals apunten a sentits oposats, en girem
+  // UNA (la de B) perquè la rotació posterior sigui la mínima possible.
+  if (nA.dot(nB) < 0) nB.negate();
+
+  // ── ROTACIÓ MÍNIMA nB → nA ──
   const q = new THREE.Quaternion().setFromUnitVectors(nB, nA);
-  const cB = new THREE.Vector3(_planeRefB.plane.centroid[0], _planeRefB.plane.centroid[1], _planeRefB.plane.centroid[2]);
+  const cB = new THREE.Vector3(planeB.centroid[0], planeB.centroid[1], planeB.centroid[2]);
 
-  // Matriu: T(cB) · R(q) · T(-cB) — rotació al voltant del centroide de B
-  const M = new THREE.Matrix4()
-    .makeTranslation(cB.x, cB.y, cB.z)
-    .multiply(new THREE.Matrix4().makeRotationFromQuaternion(q))
-    .multiply(new THREE.Matrix4().makeTranslation(-cB.x, -cB.y, -cB.z));
+  // ── MATRIU DE TRANSFORMACIÓ COMPLETA ──
+  // Passos: portem cB a l'origen, rotem, tornem cB al seu lloc → aquesta
+  // rotació NO desplaça el centroide de B. Després, traslladem tot el
+  // núvol B per portar cB EXACTAMENT sobre el pla A.
+  const T_cB   = new THREE.Matrix4().makeTranslation(cB.x, cB.y, cB.z);
+  const T_ncB  = new THREE.Matrix4().makeTranslation(-cB.x, -cB.y, -cB.z);
+  const R      = new THREE.Matrix4().makeRotationFromQuaternion(q);
+  const M      = new THREE.Matrix4().multiplyMatrices(T_cB, R).multiply(T_ncB);
 
-  // Ara el centroide de B segueix a cB. Calculem la distància signada de cB
-  // al pla A (n·p + d) i traslladem -d*nA per posar-lo exactament sobre A.
-  const dist = nA.dot(cB) + _planeRefA.plane.d;
+  // Distància signada del centroide (ja rotat però encara a cB) al pla A
+  const dist = nA.dot(cB) + planeA.d;
+  // Traslladem -dist · nA (portant cB al pla A)
   M.premultiply(new THREE.Matrix4().makeTranslation(-nA.x * dist, -nA.y * dist, -nA.z * dist));
 
-  const srcCloud = _planeRefB.cloud;
+  // ── APLICACIÓ NOMÉS AL NÚVOL MÒBIL (srcCloud = B) ──
   pushUndo(srcCloud);
   srcCloud.applyMatrix4(M);
   srcCloud.updateMatrixWorld(true);
   syncClipBox(srcCloud);
   selectCloud(srcCloud);
 
-  // Deixem els plans marcats però actualitzem l'estat (per si es vol tornar a intentar)
-  logAction('plane_align_apply', { src: srcCloud.name || '?', dst: _planeRefA.cloud.name || '?', angleDeg: (Math.acos(Math.max(-1, Math.min(1, nA.dot(nB0)))) * 180/Math.PI).toFixed(1), shiftM: Math.abs(dist).toFixed(3) });
-  diag('alineat per plans: ' + (srcCloud.name||'B') + ' → ' + (_planeRefA.cloud.name||'A') + ' · desplaçament ' + Math.abs(dist).toFixed(3) + ' m');
+  const angleDeg = (Math.acos(Math.max(-1, Math.min(1, nA.dot(nBraw)))) * 180/Math.PI).toFixed(1);
+  logAction('plane_align_apply', { src: srcCloud.name || '?', dst: dstCloud.name || '?', angleDeg, shiftM: Math.abs(dist).toFixed(3) });
+  diag('alineat per plans: núvol MÒBIL "' + (srcCloud.name||'B') + '" → pla de "' + (dstCloud.name||'A') + '" · gir ' + angleDeg + '° · desplaçament ' + Math.abs(dist).toFixed(3) + ' m');
   const info = document.getElementById('planesInfo');
-  if (info) info.textContent = '✓ Alineat. Fes ICP fi si vols acabar de refinar.';
+  if (info) info.textContent = '✓ Alineat (' + angleDeg + '° · ' + Math.abs(dist).toFixed(2) + 'm). Fes ICP fi si vols refinar.';
 }
 
 // Copia el JSON al porta-retalls (per enganxar-lo a la IA)
