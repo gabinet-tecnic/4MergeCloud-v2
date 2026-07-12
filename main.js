@@ -5,7 +5,7 @@ import { TransformControls } from './jsm/controls/TransformControls.js';
 import { loadPLY, loadXYZ } from './loaders/pointcloud_loaders.js';
 
 // ── Versió i feature flags ────────────────────────────────────────────────────
-const APP_VERSION = '2.31.0';
+const APP_VERSION = '2.31.1';
 const FEATURES = {
   segmentacioSemantica: false,  // RANSAC + classificació per tipus
   completatBuits:       false,  // omplir forats basant-se en semàntica
@@ -777,9 +777,8 @@ function updateClipPlanes() {
 }
 
 function removeClipBox() {
-  const cloud = selectedCloud || clouds.find(c => c.userData.clipBox);
-  if (!cloud || !cloud.userData.clipBox) return;
-  const box = cloud.userData.clipBox;
+  const { cloud, box } = _findClipBoxOwner();
+  if (!cloud || !box) return;
   scene.remove(box);
   box.geometry.dispose(); box.material.dispose();
   const si = selectableObjects.indexOf(box);
@@ -796,8 +795,37 @@ function removeClipBox() {
   }
 }
 
+// Reconcilia l'estat de les caixes de tall: si un cloud.userData.clipBox
+// apunta a un box que ja no és a l'escena → el neteja. Retorna el parell
+// { cloud, box } coherent (preferint selectedCloud si en té; si no,
+// el primer núvol amb clipBox vàlida a l'escena).
+function _findClipBoxOwner() {
+  // Passada 1: netegem referències òrfenes (box eliminat de l'escena)
+  for (const c of clouds) {
+    const b = c.userData?.clipBox;
+    if (b && !scene.children.includes(b)) {
+      c.userData.clipBox = null;
+      c.userData.boxRelMatrix = null;
+      c.material.clippingPlanes = [];
+      c.material.needsUpdate = true;
+      diag('reconcile: clipBox òrfena netejada al núvol "' + (c.name||'?') + '"');
+    }
+  }
+  // Passada 2: prefereix la caixa del núvol seleccionat, si en té
+  if (selectedCloud?.userData?.clipBox && scene.children.includes(selectedCloud.userData.clipBox)) {
+    return { cloud: selectedCloud, box: selectedCloud.userData.clipBox };
+  }
+  // Fallback: primer núvol amb caixa vàlida
+  for (const c of clouds) {
+    if (c.userData?.clipBox && scene.children.includes(c.userData.clipBox)) {
+      return { cloud: c, box: c.userData.clipBox };
+    }
+  }
+  return { cloud: null, box: null };
+}
+
 function getActiveClipBox() {
-  return selectedCloud?.userData.clipBox ?? null;
+  return _findClipBoxOwner().box;
 }
 
 function syncClipBox(cloud) {
@@ -2886,8 +2914,18 @@ async function clearActionLog() {
   await _persistActionLog();
   if (_actionLogPanelOpen) _renderActionLog();
 }
+// Llegeix el textarea de comentari del panell de diagnòstic (buit si no hi és)
+function _readUserComment() {
+  const ta = document.getElementById('diagUserComment');
+  return (ta && ta.value.trim()) || '';
+}
 function exportActionLogJSON() {
-  const bundle = { format: '4mc-action-log', version: 1, at: new Date().toISOString(), count: _actionLog.length, actions: _actionLog };
+  const userComment = _readUserComment();
+  const bundle = {
+    format: '4mc-action-log', version: 1, at: new Date().toISOString(),
+    userComment: userComment || null,
+    count: _actionLog.length, actions: _actionLog,
+  };
   const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
@@ -2897,12 +2935,14 @@ function exportActionLogJSON() {
   return _actionLog.length;
 }
 function exportActionLogTXT() {
+  const userComment = _readUserComment();
   const fmt = e => {
     const t = new Date(e.ts).toTimeString().slice(0, 8);
     const ctx = e.ctx ? ' · ' + Object.entries(e.ctx).map(([k,v]) => `${k}=${v}`).join(' ') : '';
     return `[${t}] ${e.type}${ctx}`;
   };
-  const txt = _actionLog.map(fmt).join('\n');
+  const header = userComment ? '── COMENTARI DE L\'USUARI ──\n' + userComment + '\n\n' : '';
+  const txt = header + _actionLog.map(fmt).join('\n');
   const blob = new Blob([txt], { type: 'text/plain' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
@@ -3237,10 +3277,8 @@ document.addEventListener('keydown', e => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function applyAndKeepClip() {
-  const cloud = selectedCloud || clouds.find(c => c.userData.clipBox);
-  if (!cloud || !cloud.userData.clipBox) { alert(T.noBoxCreated); return; }
-
-  const box = cloud.userData.clipBox;
+  const { cloud, box } = _findClipBoxOwner();
+  if (!cloud || !box) { alert(T.noBoxCreated); return; }
   box.updateMatrixWorld(true);
   const planes = LOCAL_CLIP_PLANES.map(p => p.clone().applyMatrix4(box.matrixWorld));
 
@@ -3289,8 +3327,8 @@ function applyAndKeepClip() {
 // Exportar secció de la caixa de tall com a DXF
 // ─────────────────────────────────────────────
 function exportClipSectionDXF() {
-  const cloud = selectedCloud || clouds.find(c => c.userData.clipBox);
-  if (!cloud || !cloud.userData.clipBox) { alert(T.noBoxCreated); return; }
+  const { cloud } = _findClipBoxOwner();
+  if (!cloud) { alert(T.noBoxCreated); return; }
 
   // Determina els eixos de projecció segons la vista actual
   const cam = useOrtho ? orthoCamera : camera;
@@ -5430,7 +5468,8 @@ function initActionLogger() {
 
   // Cablejat dels botons del panell d'historial
   document.getElementById('btnHistoryCopyJSON')?.addEventListener('click', async () => {
-    const json = JSON.stringify({ format:'4mc-action-log', version:1, at:new Date().toISOString(), count:_actionLog.length, actions:_actionLog }, null, 2);
+    const uc = _readUserComment();
+    const json = JSON.stringify({ format:'4mc-action-log', version:1, at:new Date().toISOString(), userComment: uc || null, count:_actionLog.length, actions:_actionLog }, null, 2);
     try { await navigator.clipboard.writeText(json); }
     catch (_) { const ta=document.createElement('textarea'); ta.value=json; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); }
     diag('historial d\'accions copiat (' + _actionLog.length + ' entrades)');
@@ -5465,12 +5504,19 @@ function initDiagUI() {
     _renderDiag();
   });
   document.getElementById('diagCopy')?.addEventListener('click', async () => {
-    const txt = _diagStateSummary() + '\n' + _diagLog.join('\n');
+    const txt = _buildDiagText();
     try { await navigator.clipboard.writeText(txt); }
     catch (_) { const ta = document.createElement('textarea'); ta.value = txt; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); }
     const b = document.getElementById('diagCopy');
     if (b) { const t = b.textContent; b.textContent = '✓ Copiat'; setTimeout(() => { b.textContent = t; }, 1200); }
   });
+}
+
+// Format complet per al text de diagnòstic (amb comentari opcional de l'usuari al davant)
+function _buildDiagText() {
+  const comment = _readUserComment();
+  const header = comment ? '── COMENTARI DE L\'USUARI ──\n' + comment + '\n\n' : '';
+  return header + _diagStateSummary() + '\n' + _diagLog.join('\n');
 }
 
 function _edSetModeBtn(m) {
@@ -5730,7 +5776,11 @@ function initCmdLine() {
   const apiKeySave  = document.getElementById('apiKeySave');
   const apiKeySkip  = document.getElementById('apiKeySkip');
 
-  if (apiKeyRow) apiKeyRow.style.display = saved ? 'none' : 'flex';
+  // CONFIG (v2.31.1): amagar la UI de la clau API/URL del Copilot IA fins que
+  // hi hagi un backend real. El codi es manté intacte per poder reactivar-ho
+  // canviant SHOW_AI_API_KEY_UI a true.
+  const SHOW_AI_API_KEY_UI = false;
+  if (apiKeyRow) apiKeyRow.style.display = (SHOW_AI_API_KEY_UI && !saved) ? 'flex' : 'none';
 
   apiKeySave?.addEventListener('click', () => {
     const key = apiKeyInput?.value.trim();
