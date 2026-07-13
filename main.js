@@ -5,7 +5,7 @@ import { TransformControls } from './jsm/controls/TransformControls.js';
 import { loadPLY, loadXYZ } from './loaders/pointcloud_loaders.js';
 
 // ── Versió i feature flags ────────────────────────────────────────────────────
-const APP_VERSION = '2.32.1';
+const APP_VERSION = '2.32.2';
 const FEATURES = {
   segmentacioSemantica: false,  // RANSAC + classificació per tipus
   completatBuits:       false,  // omplir forats basant-se en semàntica
@@ -851,23 +851,52 @@ function resetAll() {
     if (_ed2dActive) toggleEditor2D();
   } catch (e) { diag('reset editor error: ' + e.message); }
 
-  clouds.forEach(cloud => {
-    if (cloud.userData.clipBox) {
+  // ── DISPOSE PROFUND DE CADA NÚVOL (caixes de tall, geometries, materials) ──
+  // Iterem sobre una còpia perquè el bucle modifica clouds al fer scene.remove.
+  const _snapshot = [...clouds];
+  for (const cloud of _snapshot) {
+    // Caixa de tall associada
+    if (cloud.userData?.clipBox) {
       const box = cloud.userData.clipBox;
       scene.remove(box);
-      box.geometry.dispose(); box.material.dispose();
-      const si = selectableObjects.indexOf(box);
-      if (si >= 0) selectableObjects.splice(si, 1);
+      box.geometry?.dispose(); box.material?.dispose();
+      const bi = selectableObjects.indexOf(box); if (bi >= 0) selectableObjects.splice(bi, 1);
+      cloud.userData.clipBox = null;
+      cloud.userData.boxRelMatrix = null;
     }
-  });
-
-  [...clouds].forEach(cloud => {
+    // WeakMap de selecció (llaç) — el cloud ja no serà referenciat, però expressament
+    if (_pickState && _pickState.delete) _pickState.delete(cloud);
+    // Fora de l'escena i tots els arrays
     scene.remove(cloud);
-    cloud.geometry.dispose(); cloud.material.dispose();
-    const si = selectableObjects.indexOf(cloud);
-    if (si >= 0) selectableObjects.splice(si, 1);
-  });
+    const ci = clouds.indexOf(cloud); if (ci >= 0) clouds.splice(ci, 1);
+    const si = selectableObjects.indexOf(cloud); if (si >= 0) selectableObjects.splice(si, 1);
+    // .dispose() estricte
+    cloud.geometry?.dispose();
+    if (cloud.material) {
+      // Textures del material també
+      for (const k of ['map', 'alphaMap', 'aoMap', 'bumpMap', 'displacementMap', 'emissiveMap', 'envMap', 'lightMap', 'metalnessMap', 'normalMap', 'roughnessMap']) {
+        cloud.material[k]?.dispose?.();
+      }
+      cloud.material.dispose();
+    }
+    // Neteja atributs de userData
+    cloud.userData = {};
+  }
   clouds.length = 0;
+  selectableObjects.length = 0;
+
+  // Overlays DXF: cadascun és un Group amb Lines/Points fills — dispose de tots
+  if (Array.isArray(dxfOverlays)) {
+    for (const ov of dxfOverlays) {
+      const g = ov.group;
+      if (g) {
+        g.traverse(o => { o.geometry?.dispose?.(); o.material?.dispose?.(); });
+        scene.remove(g);
+      }
+    }
+    dxfOverlays.length = 0;
+    const dl = document.getElementById('dxfListPanel'); if (dl) dl.innerHTML = '';
+  }
 
   clearAllMeasurements();
   clearAlignMarkers();
@@ -880,9 +909,15 @@ function resetAll() {
   if (lassoErasing) stopLassoErase();
   if (_picking) _pickStop();
   _pickBuffer = { at: null, color: null, count: 0, clouds: [] };
+  _planeRefA = null; _planeRefB = null;
+  if (typeof _updatePlaneRefsUI === 'function') _updatePlaneRefsUI();
 
   transformControls.detach();
   setMode('none');
+
+  // ── ANTI-FANTASMES: neteja INPUTS DE FITXER perquè cap "cua" quedi al DOM ──
+  const _fi = document.getElementById('fileInput'); if (_fi) _fi.value = '';
+  const _di = document.getElementById('dirInput');  if (_di) _di.value = '';
 
   const measureBadge = document.getElementById('measureBadge');
   if (measureBadge) measureBadge.style.display = 'none';
@@ -893,6 +928,10 @@ function resetAll() {
   updateUndoBtn();
   updateMeasureList();
   persistSession(true);   // esborra també la sessió auto-desada
+
+  // Suggeriment al GC: forcem un microtick perquè els disposes es processin
+  // abans de qualsevol nova càrrega (l'iPad té heap limitat).
+  setTimeout(() => { diag('reset complet · ' + (performance.memory?.usedJSHeapSize ? Math.round(performance.memory.usedJSHeapSize/1024/1024) + ' MB JS' : 'GC hint enviat')); }, 0);
 }
 
 // ─────────────────────────────────────────────
@@ -3632,10 +3671,31 @@ function setupUI() {
 
   const CLOUD_EXTS = ['ply', 'xyz', 'txt', 'obj', 'glb', 'gltf'];
 
+  // Signatura del darrer conjunt de fitxers processat, per rebutjar duplicats
+  // consecutius (l'iPad Safari a vegades dispara 'change' més d'una vegada).
+  let _lastFilesSignature = null;
+
   async function handleFiles(fileList) {
     if (_loading || !fileList) return;
     const files = Array.from(fileList);
     if (files.length === 0) return;
+
+    // ── ANTI-FANTASMES: buida els inputs ARA (abans de processar), NO al final.
+    // Si el navegador re-dispara 'change' amb la mateixa selecció, no el reactivem.
+    if (fileInput) fileInput.value = '';
+    const _dirInput = document.getElementById('dirInput');
+    if (_dirInput) _dirInput.value = '';
+
+    // Signatura defensiva: nom+mida+ts de tots els fitxers. Si la mateixa
+    // signatura arriba dues vegades seguides en <5s, la rebutgem.
+    const sig = files.map(f => f.name + '|' + f.size + '|' + (f.lastModified || 0)).join(',');
+    const now = Date.now();
+    if (_lastFilesSignature && _lastFilesSignature.sig === sig && (now - _lastFilesSignature.at) < 5000) {
+      diag('⛔ càrrega duplicada ignorada (' + files.length + ' fitxers, mateixa signatura en <5s)');
+      return;
+    }
+    _lastFilesSignature = { sig, at: now };
+
     _loading = true;
     // Mapa de fitxers "companys" (per resoldre .mtl i textures dels OBJ):
     // s'indexen pel nom base i pel camí relatiu (carpeta) en minúscules.

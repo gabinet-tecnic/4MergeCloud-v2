@@ -824,8 +824,8 @@
             </div>
           </div>
 
-          <!-- SEGMENTACIÓ IA (client + backend provisional) -->
-          <div style="margin-top:10px;border-top:1px solid #262b38;padding-top:10px">
+          <!-- SEGMENTACIÓ IA (client + backend provisional) — OCULT fins que hi hagi backend real (v2.32.2) -->
+          <div id="segIABlock" style="display:none !important;margin-top:10px;border-top:1px solid #262b38;padding-top:10px">
             <div style="font-size:9px;font-weight:700;color:#556;letter-spacing:1.2px;text-transform:uppercase;margin-bottom:6px">Segmentació IA</div>
             <div id="segNote" style="font-size:10px;color:#665;background:rgba(224,120,32,0.05);border:1px solid rgba(224,120,32,0.2);border-radius:6px;padding:6px 8px;margin-bottom:6px;line-height:1.4">
               <b style="color:#e07820">Provisional</b>: classificador heurístic local (no és una IA 3D real). El contracte està preparat per connectar amb SAM3D/PointNet++ el dia que hi hagi endpoint.
@@ -1050,7 +1050,7 @@
           <span>&#9679;</span> AS-BUILT 3D CAD SCANNER
         </div>
         <h1>Benvingut/da a 4 Merge Cloud</h1>
-        <p>L'editor 3D i Copilot IA de núvols de punts de referència</p>
+        <p>L'editor 3D de núvols de punts de referència</p>
         <ul class="welcome-steps">
           <li>
             <div class="step-num">1</div>
@@ -1062,7 +1062,7 @@
           </li>
           <li>
             <div class="step-num">3</div>
-            <span>Dibuixa marques i enllaça amb el Copilot IA per demanar diagnòstics i automatitzar transformacions al moment.</span>
+            <span>Dibuixa marques i planta un CAD 2D per generar DXF de la construcció escanejada.</span>
           </li>
         </ul>
         <div class="welcome-actions">
@@ -1126,8 +1126,8 @@
       <button id="viewA_left"  class="view-btn" title="Lateral Esquerra">LE</button>
     </div>
 
-    <!-- CAD Command Line (Copilot IA) -->
-    <div id="cmdLine" class="collapsed">
+    <!-- CAD Command Line (Copilot IA) — OCULT fins que hi hagi backend real (v2.32.2) -->
+    <div id="cmdLine" class="collapsed" style="display:none !important">
       <div id="cmdHeader">
         <span class="cmd-label">
           <span class="cmd-label-dot"></span>
@@ -1144,8 +1144,14 @@
         <button id="apiKeySkip" title="Tancar" style="font-size:11px; background:none; border:none; color:#445; cursor:pointer; padding:0 3px;">✕</button>
       </div>
       -->
-      <!-- Salvaguarda extra: si algun codi crea/mostra apiKeyRow programàticament, aquest CSS el força invisible -->
-      <style>#apiKeyRow { display: none !important; }</style>
+      <!-- Salvaguarda extra: si algun codi crea/mostra apiKeyRow o el Copilot IA programàticament, aquest CSS el força invisible -->
+      <style>
+        #apiKeyRow { display: none !important; }
+        /* Copilot IA (línia de comandes CAD) — ocult fins que hi hagi backend real */
+        #cmdLine { display: none !important; }
+        /* Segmentació IA (client heurístic + panell de dataset) */
+        #segIABlock { display: none !important; }
+      </style>
       <div id="cmdHistory"></div>
       <div id="cmdInputRow">
         <span class="cmd-prompt">4MC&gt;</span>
