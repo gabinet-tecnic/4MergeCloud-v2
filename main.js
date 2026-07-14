@@ -5,7 +5,7 @@ import { TransformControls } from './jsm/controls/TransformControls.js';
 import { loadPLY, loadXYZ } from './loaders/pointcloud_loaders.js';
 
 // ── Versió i feature flags ────────────────────────────────────────────────────
-const APP_VERSION = '2.32.2';
+const APP_VERSION = '2.33.1';
 const FEATURES = {
   segmentacioSemantica: false,  // RANSAC + classificació per tipus
   completatBuits:       false,  // omplir forats basant-se en semàntica
@@ -1149,8 +1149,17 @@ function handleAlignClick(pWorld, cloud) {
     if (alignMode === 2) applyAlign2pt(srcC, alignSrcPts, alignTgtPts);
     else                 applyAlign3pt(srcC, alignSrcPts, alignTgtPts);
     cancelAlign();
-    // Reforç automàtic: afinament local per color+posició de l'entorn dels punts
-    refineAlignByColor(srcC, tgtC, anchors);
+    // Reforç automàtic OPCIONAL (OFF per defecte des de v2.33.1):
+    // el refinament ICP per color pot arrossegar l'alineació lluny dels punts
+    // que l'usuari acaba de marcar (especialment amb textures repetitives o
+    // colors subtils). Ara només s'executa si l'usuari marca la casella.
+    const wantColorRefine = document.getElementById('alignRefineColor')?.checked;
+    if (wantColorRefine) {
+      diag('reforç color: activat per l\'usuari (checkbox)');
+      refineAlignByColor(srcC, tgtC, anchors);
+    } else {
+      diag('reforç color: desactivat (casella OFF) → alineació manual pura');
+    }
   } else {
     updateAlignBadge();
   }
@@ -2426,6 +2435,37 @@ function _applyPick() {
   }, 20);
 }
 
+// Sincronitza l'estat del botó "Unir" a la barra superior segons els núvols VISIBLES.
+// Deshabilita quan hi ha menys de 2 núvols amb `visible !== false`.
+function _syncMergeBtn() {
+  const btn = document.getElementById('tbMerge');
+  if (!btn) return;
+  const visibleCount = clouds.filter(c => c && c.visible !== false).length;
+  btn.disabled = visibleCount < 2;
+  btn.title = btn.disabled
+    ? 'Cal ≥2 núvols visibles per unir'
+    : 'Unir tots els núvols visibles en un de sol';
+}
+
+// Restaura els colors ORIGINALS dels punts marcats amb el llaç a un núvol
+// concret, i esborra la seva entrada de _pickState. NO toca posicions.
+// Retorna el nombre de punts restaurats (0 si no hi havia selecció activa).
+function _restoreCloudPickColors(cloud) {
+  const st = _pickState.get(cloud);
+  if (!st) return 0;
+  const col = cloud.geometry?.getAttribute('color');
+  if (col && st.origColors && st.origColors.length === st.indices.length * 3) {
+    for (let i = 0; i < st.indices.length; i++) {
+      const idx = st.indices[i], o = i * 3;
+      col.setXYZ(idx, st.origColors[o], st.origColors[o+1], st.origColors[o+2]);
+    }
+    col.needsUpdate = true;
+  }
+  const n = st.indices.length;
+  _pickState.delete(cloud);
+  return n;
+}
+
 // Restaura els colors originals dels punts seleccionats a tots els núvols.
 function _pickClearAll() {
   let n = 0;
@@ -2595,48 +2635,147 @@ function _projectOntoPlane(p, plane) {
   return [p[0] - plane.n[0]*s, p[1] - plane.n[1]*s, p[2] - plane.n[2]*s];
 }
 
-// Executa el REPARAT: selecció actual + anell → pla RANSAC → projecta seleccionats
-// sobre el pla i actualitza la geometria de cada núvol involucrat. pushUndo per
-// poder desfer. Restaura els colors originals dels seleccionats (que estaven
-// vermells/grocs pel ressaltat del llaç).
-async function _repairSurface() {
-  const sel = _pickBuffer;
-  if (!sel || !sel.count) { alert('Fes primer una selecció amb el llaç.'); return; }
+// ─── DIÀLEG D'INTENCIÓ (modal senzill promise-based) ──────────────────────────
+// Mostra un overlay amb títol + descripció + N botons; resol amb la clau
+// del botó premut (o null si cancel·la). Ús: const opt = await _showIntentDialog({...});
+function _showIntentDialog({ title, description, options }) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:99999;display:flex;align-items:center;justify-content:center;font-family:inherit;';
+    const box = document.createElement('div');
+    box.style.cssText = 'background:#1a1e28;color:#dde;border:1px solid #2a3040;border-radius:10px;padding:18px 20px;max-width:440px;width:90%;box-shadow:0 12px 40px rgba(0,0,0,0.6);';
+    box.innerHTML = `
+      <div style="font-size:14px;font-weight:700;color:#e07820;margin-bottom:6px;">${title}</div>
+      <div style="font-size:12px;line-height:1.5;color:#aab;margin-bottom:14px;">${description}</div>
+      <div style="display:flex;flex-direction:column;gap:6px;"></div>
+      <div style="display:flex;justify-content:flex-end;margin-top:12px;">
+        <button data-cancel="1" style="background:none;border:1px solid #445;color:#aab;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:11px;">Cancel·lar</button>
+      </div>`;
+    const btnRow = box.querySelector('div[style*="flex-direction:column"]');
+    for (const opt of options) {
+      const b = document.createElement('button');
+      b.style.cssText = 'background:#252b38;border:1px solid #3a4152;color:#dde;padding:10px 12px;border-radius:8px;cursor:pointer;font-size:12px;text-align:left;line-height:1.4;';
+      b.innerHTML = `<b style="color:#fff;">${opt.label}</b><br><span style="color:#889;font-size:11px;">${opt.desc}</span>`;
+      b.onmouseover = () => b.style.borderColor = '#e07820';
+      b.onmouseout  = () => b.style.borderColor = '#3a4152';
+      b.onclick = () => { document.body.removeChild(overlay); resolve(opt.key); };
+      btnRow.appendChild(b);
+    }
+    box.querySelector('button[data-cancel]').onclick = () => { document.body.removeChild(overlay); resolve(null); };
+    overlay.appendChild(box);
+    overlay.onclick = (e) => { if (e.target === overlay) { document.body.removeChild(overlay); resolve(null); } };
+    document.body.appendChild(overlay);
+  });
+}
 
-  const badge = document.getElementById('loadingBadge');
-  if (badge) { badge.style.display = 'block'; badge.textContent = '⏳ Analitzant paret…'; }
-  await new Promise(r => setTimeout(r, 0));
+// Radi d'anell ADAPTATIU segons mida de la selecció (no una constant global):
+// diagonal de la bbox de la selecció × 0.15, entre 5cm i 50cm.
+function _adaptiveRingRadius(selWorld) {
+  if (!selWorld.length) return 0.05;
+  let mnx=Infinity,mny=Infinity,mnz=Infinity, mxx=-Infinity,mxy=-Infinity,mxz=-Infinity;
+  for (const p of selWorld) {
+    if (p[0]<mnx) mnx=p[0]; if (p[1]<mny) mny=p[1]; if (p[2]<mnz) mnz=p[2];
+    if (p[0]>mxx) mxx=p[0]; if (p[1]>mxy) mxy=p[1]; if (p[2]>mxz) mxz=p[2];
+  }
+  const diag = Math.hypot(mxx-mnx, mxy-mny, mxz-mnz);
+  return Math.min(0.5, Math.max(0.05, diag * 0.15));
+}
 
-  const info = document.getElementById('pickInfo');
-  const stats = { totalRepaired: 0, ringUsed: 0, resIn: 0, resTot: 0, clouds: 0, mmSaved: 0 };
+// RANSAC BILATERAL: troba fins a 2 plans (les 2 cares de la paret) a l'anell.
+// Executa RANSAC un cop, treu els inliers, i torna a executar sobre la resta.
+// Si el segon pla té ≥25% del compte del primer i normals ≈ paral·leles
+// (|nA·nB| > 0.85), és una situació de 2 cares: retorna { primary, secondary }.
+// Altrament: { primary }.
+function _ransacBilateral(ring) {
+  const first = _ransacPlane(ring, { iters: 250 });
+  if (!first || !first.plane) return null;
+  // Recull residual (punts fora d'eps del primer pla)
+  const eps = first.eps || 0.02;
+  const P1 = first.plane;
+  const residual = [];
+  for (const p of ring) {
+    const dst = Math.abs(P1.n[0]*p[0] + P1.n[1]*p[1] + P1.n[2]*p[2] + P1.d);
+    if (dst > eps) residual.push(p);
+  }
+  if (residual.length < Math.max(20, ring.length * 0.20)) return { primary: first };
+  const second = _ransacPlane(residual, { iters: 200 });
+  if (!second || !second.plane) return { primary: first };
+  const dot = Math.abs(P1.n[0]*second.plane.n[0] + P1.n[1]*second.plane.n[1] + P1.n[2]*second.plane.n[2]);
+  if (dot < 0.85) return { primary: first };   // no és 2a cara de la mateixa paret
+  return { primary: first, secondary: second };
+}
+
+// Tria quin pla (dels 1 o 2 candidats) representa la cara "correcta" que
+// l'usuari vol reconstruir. Heurística: la selecció és una BUFADA que sobresurt
+// d'una de les 2 cares. La cara "bona" a projectar-hi és la MÉS PROPERA al
+// centre de la selecció (les bufades solen ser petits desplaçaments d'una cara
+// concreta, no del pla mitjà entre elles).
+function _pickTargetPlane(candidates, selWorld) {
+  if (!candidates.secondary) return candidates.primary.plane;
+  const n = selWorld.length;
+  let cx=0, cy=0, cz=0;
+  for (const p of selWorld) { cx+=p[0]; cy+=p[1]; cz+=p[2]; }
+  cx/=n; cy/=n; cz/=n;
+  const dA = Math.abs(candidates.primary.plane.n[0]*cx + candidates.primary.plane.n[1]*cy + candidates.primary.plane.n[2]*cz + candidates.primary.plane.d);
+  const dB = Math.abs(candidates.secondary.plane.n[0]*cx + candidates.secondary.plane.n[1]*cy + candidates.secondary.plane.n[2]*cz + candidates.secondary.plane.d);
+  return dA <= dB ? candidates.primary.plane : candidates.secondary.plane;
+}
+
+// ─── MODE 1: reparació com a PARET PLANA (RANSAC bilateral + guard qualitat) ──
+async function _repairAsPlane(badge, info) {
+  const stats = { totalRepaired: 0, ringUsed: 0, cloudsUsed: 0, mmShift: 0, consensPct: 0, aborted: [] };
 
   for (const cloud of clouds) {
     const st = _pickState.get(cloud);
     if (!st || st.indices.length === 0) continue;
 
-    // Amplada del buffer exterior: 3× la mida mitjana de cel·la del núvol
-    // (=aproximadament 3 vèrtexs "sans" al voltant de la selecció)
     cloud.updateMatrixWorld(true);
-    const bbox = new THREE.Box3().setFromObject(cloud);
-    const dsz = bbox.getSize(new THREE.Vector3()).length() || 1;
-    const bufferR = Math.max(dsz / 200, 0.05);   // ≈ 5cm mínim
+    // Extreu selecció en MÓN abans de calcular res (per al radi adaptatiu)
+    const selWorldPreview = _extractWorldPointsFromCloud(cloud, Array.from(st.indices));
+    const bufferR = _adaptiveRingRadius(selWorldPreview);
 
-    if (badge) badge.textContent = '⏳ Buscant punts sans al voltant…';
+    if (badge) badge.textContent = '⏳ Buscant anell sà (radi ' + (bufferR*100).toFixed(0) + ' cm)…';
     await new Promise(r => setTimeout(r, 0));
     const { ring, selWorld } = _collectHealthyRing(cloud, Array.from(st.indices), bufferR);
-    if (ring.length < 12) {
-      diag('reparar: núvol "' + (cloud.name||'Núvol') + '" no té prou punts sans al voltant (' + ring.length + '), s\'omet');
+    if (ring.length < 20) {
+      stats.aborted.push({ cloud: cloud.name || 'Núvol', reason: 'anell massa petit (' + ring.length + ' pts)' });
       continue;
     }
 
-    if (badge) badge.textContent = '⏳ Ajustant pla (RANSAC)…';
+    if (badge) badge.textContent = '⏳ RANSAC bilateral (2 cares)…';
     await new Promise(r => setTimeout(r, 0));
-    const result = _ransacPlane(ring, { iters: 250 });
-    if (!result || !result.plane) { diag('reparar: RANSAC no convergeix a "' + (cloud.name||'Núvol') + '"'); continue; }
-    const plane = result.plane;
+    const cands = _ransacBilateral(ring);
+    if (!cands) { stats.aborted.push({ cloud: cloud.name || 'Núvol', reason: 'RANSAC no convergeix' }); continue; }
+    const plane = _pickTargetPlane(cands, selWorld);
 
-    // Projecta els punts seleccionats sobre el pla, mesura desplaçament mitjà
-    // (per informar), i actualitza la geometria (posicions locals = worldInverse·nova).
+    // Calcula qualitat del pla ESCOLLIT: inliers/ring
+    const P = plane;
+    const epsQ = cands.primary.eps || 0.02;
+    let inlQ = 0;
+    for (const p of ring) if (Math.abs(P.n[0]*p[0] + P.n[1]*p[1] + P.n[2]*p[2] + P.d) < epsQ) inlQ++;
+    const consens = inlQ / ring.length;
+
+    // Simula desplaçament ABANS d'aplicar per al guard
+    let sumShift = 0, maxShift = 0;
+    for (const wp of selWorld) {
+      const np = _projectOntoPlane(wp, plane);
+      const d = Math.hypot(np[0]-wp[0], np[1]-wp[1], np[2]-wp[2]);
+      sumShift += d; if (d > maxShift) maxShift = d;
+    }
+    const avgShiftM = sumShift / Math.max(1, selWorld.length);
+
+    // GUARD DE QUALITAT: no apliquem si la reparació seria dolenta
+    // - consens < 40% → el pla no representa bé la geometria
+    // - desplaçament mitjà > 15cm → estem "empenyent" els punts massa lluny
+    if (consens < 0.40 || avgShiftM > 0.15) {
+      stats.aborted.push({
+        cloud: cloud.name || 'Núvol',
+        reason: 'qualitat baixa (consens ' + Math.round(consens*100) + '%, desplaçament mitjà ' + Math.round(avgShiftM*1000) + ' mm)'
+      });
+      continue;
+    }
+
+    // Aplica: pushUndo, projecta selecció, restaura colors
     const pos = cloud.geometry.getAttribute('position');
     const col = cloud.geometry.getAttribute('color');
     const mw  = cloud.matrixWorld;
@@ -2645,18 +2784,15 @@ async function _repairSurface() {
 
     pushUndo(cloud, true);
 
-    let sumShift = 0;
     for (let i = 0; i < st.indices.length; i++) {
       const idx = st.indices[i];
-      const wp = selWorld[i];
-      const np = _projectOntoPlane(wp, plane);
-      sumShift += Math.hypot(np[0]-wp[0], np[1]-wp[1], np[2]-wp[2]);
+      const wp  = selWorld[i];
+      const np  = _projectOntoPlane(wp, plane);
       vLocal.set(np[0], np[1], np[2]).applyMatrix4(mwI);
       pos.setXYZ(idx, vLocal.x, vLocal.y, vLocal.z);
     }
     pos.needsUpdate = true;
 
-    // Restaura els colors ORIGINALS dels seleccionats (treu el ressaltat vermell)
     if (col && st.origColors && st.origColors.length === st.indices.length * 3) {
       for (let i = 0; i < st.indices.length; i++) {
         const idx = st.indices[i], o = i * 3;
@@ -2670,30 +2806,159 @@ async function _repairSurface() {
 
     stats.totalRepaired += st.indices.length;
     stats.ringUsed      += ring.length;
-    stats.resIn         += result.inliers;
-    stats.resTot        += result.total;
-    stats.clouds        += 1;
-    stats.mmSaved       += (sumShift / Math.max(1, st.indices.length)) * 1000;
+    stats.cloudsUsed    += 1;
+    stats.mmShift       += avgShiftM * 1000;
+    stats.consensPct    += consens * 100;
+    diag('reparar (paret) "' + (cloud.name||'Núvol') + '": ' + st.indices.length + ' pts · anell ' + ring.length + ' · consens ' + Math.round(consens*100) + '% · shift ' + Math.round(avgShiftM*1000) + ' mm' + (cands.secondary ? ' (2 cares detectades)' : ''));
   }
+  return stats;
+}
+
+// ─── MODE 2: reparació com a BUIT (interpolació k-NN, sense pla) ──────────────
+// Per a cada punt seleccionat, mou-lo cap a la mitjana dels K=8 veïns SANS més
+// propers. Útil quan la selecció és soroll dispers, no una bufada d'una paret.
+async function _repairAsGap(badge, info) {
+  const stats = { totalRepaired: 0, cloudsUsed: 0, mmShift: 0, aborted: [] };
+  const K = 8;
+
+  for (const cloud of clouds) {
+    const st = _pickState.get(cloud);
+    if (!st || st.indices.length === 0) continue;
+
+    cloud.updateMatrixWorld(true);
+    const selWorld0 = _extractWorldPointsFromCloud(cloud, Array.from(st.indices));
+    const bufferR = _adaptiveRingRadius(selWorld0) * 2;   // radi més ampli per tenir veïns suficients
+
+    if (badge) badge.textContent = '⏳ Recollint veïns sans (radi ' + (bufferR*100).toFixed(0) + ' cm)…';
+    await new Promise(r => setTimeout(r, 0));
+    const { ring, selWorld } = _collectHealthyRing(cloud, Array.from(st.indices), bufferR);
+    if (ring.length < K) {
+      stats.aborted.push({ cloud: cloud.name || 'Núvol', reason: 'no hi ha prou veïns sans (' + ring.length + ')' });
+      continue;
+    }
+
+    // Hash espacial sobre l'anell per a k-NN aproximat
+    const hashRing = _buildHash(ring.map(p => ({x:p[0], y:p[1], z:p[2]})), bufferR);
+    const cell = bufferR;
+
+    const pos = cloud.geometry.getAttribute('position');
+    const col = cloud.geometry.getAttribute('color');
+    const mw  = cloud.matrixWorld;
+    const mwI = new THREE.Matrix4().copy(mw).invert();
+    const vLocal = new THREE.Vector3();
+
+    pushUndo(cloud, true);
+
+    let sumShift = 0;
+    for (let i = 0; i < selWorld.length; i++) {
+      const p = selWorld[i];
+      const kx = Math.floor(p[0]/cell), ky = Math.floor(p[1]/cell), kz = Math.floor(p[2]/cell);
+      // Cerca ampliada progressivament fins tenir ≥K veïns
+      let neighbors = [];
+      for (let ext = 1; ext <= 3 && neighbors.length < K; ext++) {
+        neighbors = [];
+        for (let dx=-ext; dx<=ext; dx++)
+          for (let dy=-ext; dy<=ext; dy++)
+            for (let dz=-ext; dz<=ext; dz++) {
+              const bucket = hashRing.get(`${kx+dx},${ky+dy},${kz+dz}`);
+              if (!bucket) continue;
+              for (const bi of bucket) {
+                const q = ring[bi];
+                const d2 = (q[0]-p[0])*(q[0]-p[0]) + (q[1]-p[1])*(q[1]-p[1]) + (q[2]-p[2])*(q[2]-p[2]);
+                neighbors.push({ q, d2 });
+              }
+            }
+      }
+      if (neighbors.length === 0) continue;
+      neighbors.sort((a,b) => a.d2 - b.d2);
+      neighbors = neighbors.slice(0, K);
+      // Mitjana ponderada per 1/(d+ε)
+      let wsum = 0, mx = 0, my = 0, mz = 0;
+      for (const nb of neighbors) {
+        const w = 1 / (Math.sqrt(nb.d2) + 0.001);
+        wsum += w; mx += w * nb.q[0]; my += w * nb.q[1]; mz += w * nb.q[2];
+      }
+      mx /= wsum; my /= wsum; mz /= wsum;
+      sumShift += Math.hypot(mx-p[0], my-p[1], mz-p[2]);
+      vLocal.set(mx, my, mz).applyMatrix4(mwI);
+      pos.setXYZ(st.indices[i], vLocal.x, vLocal.y, vLocal.z);
+    }
+    pos.needsUpdate = true;
+
+    if (col && st.origColors && st.origColors.length === st.indices.length * 3) {
+      for (let i = 0; i < st.indices.length; i++) {
+        const idx = st.indices[i], o = i * 3;
+        col.setXYZ(idx, st.origColors[o], st.origColors[o+1], st.origColors[o+2]);
+      }
+      col.needsUpdate = true;
+    }
+    cloud.geometry.computeBoundingBox();
+    cloud.geometry.computeBoundingSphere();
+    _pickState.delete(cloud);
+
+    stats.totalRepaired += st.indices.length;
+    stats.cloudsUsed    += 1;
+    stats.mmShift       += (sumShift / Math.max(1, selWorld.length)) * 1000;
+    diag('reparar (buit) "' + (cloud.name||'Núvol') + '": ' + st.indices.length + ' pts · desplaçament mitjà ' + Math.round((sumShift/selWorld.length)*1000) + ' mm');
+  }
+  return stats;
+}
+
+// Executa el REPARAT: pregunta primer QUÈ és la selecció (paret plana / buit),
+// i despatxa al mode adequat. Restaura colors dels seleccionats amb èxit; NO
+// aplica res si el guard de qualitat detecta que el resultat seria dolent.
+async function _repairSurface() {
+  const sel = _pickBuffer;
+  if (!sel || !sel.count) { alert('Fes primer una selecció amb el llaç.'); return; }
+
+  const intent = await _showIntentDialog({
+    title: 'Reparar superfície — què és aquesta selecció?',
+    description: 'Tries com s\'ha d\'interpretar el que has envoltat amb el llaç. La reparació NO s\'aplicarà si el resultat sortiria dolent (avís).',
+    options: [
+      { key: 'plane', label: '🧱 Bufada d\'una paret plana',
+        desc: 'Els punts són soroll que "surt" d\'una paret sencera i plana. Es projectaran sobre la CARA CORRECTA (RANSAC bilateral: detecta les 2 cares i tria la més propera a la selecció).' },
+      { key: 'gap',   label: '🕳 Buit / soroll dispers a omplir',
+        desc: 'Els punts són brossa dispersa (no una superfície plana). Es reubicaran interpolant els 8 veïns sans més propers (mitjana ponderada per distància).' },
+    ],
+  });
+  if (!intent) { diag('reparar: cancel·lat per l\'usuari'); return; }
+  logAction('repair_intent', { mode: intent, points: sel.count });
+
+  const badge = document.getElementById('loadingBadge');
+  if (badge) { badge.style.display = 'block'; badge.textContent = '⏳ Analitzant selecció…'; }
+  await new Promise(r => setTimeout(r, 0));
+
+  const info = document.getElementById('pickInfo');
+  const stats = (intent === 'plane') ? await _repairAsPlane(badge, info) : await _repairAsGap(badge, info);
 
   if (badge) badge.style.display = 'none';
   _pickBuffer = { at: null, color: null, count: 0, clouds: [] };
-  const exportBtn = document.getElementById('btnPickExport');
-  if (exportBtn) exportBtn.disabled = true;
-  const repairBtn = document.getElementById('btnRepairSurface');
-  if (repairBtn) repairBtn.disabled = true;
+  const exportBtn = document.getElementById('btnPickExport'); if (exportBtn) exportBtn.disabled = true;
+  const repairBtn = document.getElementById('btnRepairSurface'); if (repairBtn) repairBtn.disabled = true;
 
-  if (stats.clouds === 0) {
-    if (info) info.textContent = 'No s\'ha pogut reparar cap superfície (poc anell sà o RANSAC no convergeix).';
+  // ── Report ──
+  const abortMsg = stats.aborted && stats.aborted.length
+    ? ' · ⚠ ' + stats.aborted.length + ' núvol(s) NO reparats: ' + stats.aborted.map(a => `"${a.cloud}" (${a.reason})`).join('; ')
+    : '';
+  if (stats.cloudsUsed === 0) {
+    const msg = 'No s\'ha aplicat cap reparació.' + abortMsg;
+    if (info) info.textContent = msg;
+    diag('reparar: ' + msg);
+    logAction('repair_surface', { mode: intent, repaired: 0, aborted: stats.aborted.length });
     return;
   }
-  const avgShift = (stats.mmSaved / stats.clouds).toFixed(0);
-  const consens  = Math.round(100 * stats.resIn / Math.max(1, stats.resTot));
-  const msg = '✓ ' + stats.totalRepaired.toLocaleString() + ' punts reparats — anell sà: ' + stats.ringUsed.toLocaleString() +
-              ' pts · RANSAC consens: ' + consens + '% · desplaçament mitjà: ' + avgShift + ' mm';
+  const avgShift = (stats.mmShift / stats.cloudsUsed).toFixed(0);
+  let msg;
+  if (intent === 'plane') {
+    const avgCons = Math.round(stats.consensPct / stats.cloudsUsed);
+    msg = '✓ ' + stats.totalRepaired.toLocaleString() + ' punts projectats · anell ' + stats.ringUsed.toLocaleString() + ' pts · consens ' + avgCons + '% · shift mitjà ' + avgShift + ' mm' + abortMsg;
+    logAction('repair_surface', { mode: 'plane', repaired: stats.totalRepaired, ringPts: stats.ringUsed, consensPct: avgCons, shiftMm: parseInt(avgShift,10), aborted: stats.aborted.length });
+  } else {
+    msg = '✓ ' + stats.totalRepaired.toLocaleString() + ' punts interpolats · shift mitjà ' + avgShift + ' mm' + abortMsg;
+    logAction('repair_surface', { mode: 'gap', repaired: stats.totalRepaired, shiftMm: parseInt(avgShift,10), aborted: stats.aborted.length });
+  }
   if (info) info.textContent = msg;
   diag('reparar superfície: ' + msg);
-  logAction('repair_surface', { repaired: stats.totalRepaired, ringPts: stats.ringUsed, consensPct: consens, shiftMm: parseInt(avgShift,10) });
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -2768,6 +3033,17 @@ function _setPlaneRef(which) {
   _updatePlaneRefsUI();
   logAction('plane_marked', { which, cloud: targetCloud.name || '?', points: worldPts.length, inliers: res.inliers });
   diag('pla ' + which + ' marcat: núvol "' + (targetCloud.name||'?') + '" · ' + worldPts.length + ' pts · inliers ' + res.inliers);
+
+  // Un cop marcat el pla, la selecció ja ha complert la seva funció → torna al color original
+  // (la referència del pla queda guardada a _planeRefA/B amb els índexs, per si cal recalcular).
+  _restoreCloudPickColors(targetCloud);
+  // Reset del buffer/UI de selecció: com si l'usuari hagués premut "Netejar selecció"
+  _pickBuffer = { at: null, color: null, count: 0, clouds: [] };
+  const _pi = document.getElementById('pickInfo'); if (_pi) _pi.textContent = '✓ Pla ' + which + ' marcat (selecció esborrada).';
+  const _pxBtn = document.getElementById('btnPickExport'); if (_pxBtn) _pxBtn.disabled = true;
+  const _rBtn = document.getElementById('btnRepairSurface'); if (_rBtn) _rBtn.disabled = true;
+  const _sA = document.getElementById('btnSetPlaneA'); if (_sA) _sA.disabled = true;
+  const _sB = document.getElementById('btnSetPlaneB'); if (_sB) _sB.disabled = true;
 }
 
 function _updatePlaneRefsUI() {
@@ -2853,6 +3129,15 @@ function _alignByPlanes() {
   diag('alineat per plans: núvol MÒBIL "' + (srcCloud.name||'B') + '" → pla de "' + (dstCloud.name||'A') + '" · gir ' + angleDeg + '° · desplaçament ' + Math.abs(dist).toFixed(3) + ' m');
   const info = document.getElementById('planesInfo');
   if (info) info.textContent = '✓ Alineat (' + angleDeg + '° · ' + Math.abs(dist).toFixed(2) + 'm). Fes ICP fi si vols refinar.';
+
+  // ── RESTAURA COLOR ORIGINAL de qualsevol selecció que hagi sobreviscut ──
+  // (Els punts marcats per A/B poden haver quedat pintats si l'usuari va fer
+  //  el llaç, marcar pla, i alinear sense passar per _setPlaneRef del segon
+  //  cop — cobrim el cas per seguretat.)
+  for (const c of clouds) _restoreCloudPickColors(c);
+  _pickBuffer = { at: null, color: null, count: 0, clouds: [] };
+  const _pxBtn = document.getElementById('btnPickExport'); if (_pxBtn) _pxBtn.disabled = true;
+  const _rBtn = document.getElementById('btnRepairSurface'); if (_rBtn) _rBtn.disabled = true;
 }
 
 // Copia el JSON al porta-retalls (per enganxar-lo a la IA)
@@ -4281,7 +4566,7 @@ function updateCloudList() {
     eye.className = 'cloud-eye';
     eye.textContent = cloud.visible ? '👁' : '◌';
     eye.title = cloud.visible ? 'Ocultar' : 'Mostrar';
-    eye.onclick = (e) => { e.stopPropagation(); cloud.visible = !cloud.visible; updateCloudList(); };
+    eye.onclick = (e) => { e.stopPropagation(); cloud.visible = !cloud.visible; updateCloudList(); _syncMergeBtn(); };
 
     const del = document.createElement('span');
     del.className = 'cloud-del';
@@ -4298,6 +4583,7 @@ function updateCloudList() {
   });
 
   updateStatsPanel();
+  _syncMergeBtn();
   updateWelcomeScreen();
   persistSession();   // auto-desat de la sessió (F5 no perd el treball)
 }
@@ -4723,9 +5009,14 @@ function mergeCloudsToXYZPoints(cloudList) {
 // Uneix tots els núvols carregats en un de sol DINS l'escena (sense descarregar).
 // Aplica la matriu de món de cada núvol i el substitueix pel resultat combinat.
 function mergeCloudsInScene() {
-  const list = clouds.filter(c => c?.geometry?.getAttribute('position'));
+  // NOMÉS núvols VISIBLES: si l'usuari ha ocultat una capa amb 👁, no s'uneix.
+  const list = clouds.filter(c => c?.geometry?.getAttribute('position') && c.visible !== false);
   if (list.length === 0) { alert(T.noClouds); return null; }
-  if (list.length === 1) { diag('unir: només hi ha 1 núvol, no cal unir'); return list[0]; }
+  if (list.length === 1) {
+    const hidden = clouds.length - 1;
+    diag('unir: només hi ha 1 núvol visible' + (hidden > 0 ? ' (' + hidden + ' ocult(s), ignorats)' : '') + ', no cal unir');
+    return list[0];
+  }
 
   let total = 0;
   const allHaveColor = list.every(c => c.geometry.getAttribute('color'));

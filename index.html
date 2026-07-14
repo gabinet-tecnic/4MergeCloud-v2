@@ -779,6 +779,13 @@
             <button id="align2pt">&#9679;&#9679; Alinear 2 punts</button>
             <button id="align3pt">&#9679;&#9679;&#9679; Alinear 3 punts</button>
           </div>
+          <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:#889;margin-top:6px;cursor:pointer;user-select:none;">
+            <input type="checkbox" id="alignRefineColor" style="cursor:pointer;">
+            <span>Refinar automàticament per color (ICP)</span>
+          </label>
+          <div style="font-size:10px;color:#556;margin:2px 0 4px 22px;line-height:1.3;">
+            OFF per defecte. Si l'actives, després de marcar els punts s'aplica un ICP local guiat per color que pot desviar l'alineació manual.
+          </div>
           <button id="btnICP" style="margin-top:4px">&#9881; Ajustar ICP (finor)</button>
           <!-- Auto-Alinear (Color) autònom retirat: ara el color és un reforç de l'alineació per punts -->
           <button id="btnAutoAlign" style="display:none"></button>
