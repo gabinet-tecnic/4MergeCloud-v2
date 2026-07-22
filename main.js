@@ -5,7 +5,7 @@ import { TransformControls } from './jsm/controls/TransformControls.js';
 import { loadPLY, loadXYZ } from './loaders/pointcloud_loaders.js';
 
 // ── Versió i feature flags ────────────────────────────────────────────────────
-const APP_VERSION = '2.33.1';
+const APP_VERSION = '2.33.2';
 const FEATURES = {
   segmentacioSemantica: false,  // RANSAC + classificació per tipus
   completatBuits:       false,  // omplir forats basant-se en semàntica
@@ -573,17 +573,53 @@ let currentMeasurePoints = [];
 let currentMeasureMarkers = [];
 let measurements = [];
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Exclusivitat entre eines interactives (v2.33.2)
+// ═══════════════════════════════════════════════════════════════════════════
+// Algunes eines capturen els pointerevents del #viewer: anotació, llaç de
+// selecció, alineació 2/3 pt, mode mesura. Si el usuari canvia d'una a una
+// altra sense aturar-la abans, els listeners de l'anterior segueixen
+// interceptant els clicks i el nou mode no funciona (bug reportat 22-jul).
+// Aquest helper aturà les que corresponguin. Es crida a l'entrada de cada
+// mode exclusiu; `except` evita aturar el propi.
+function _exitExclusiveTools(opts) {
+  const except = opts?.except;
+  try {
+    if (except !== 'annotate' && typeof _annActive !== 'undefined' && _annActive && typeof stopAnnotate === 'function') stopAnnotate();
+  } catch (_) {}
+  try {
+    if (except !== 'pick' && typeof _picking !== 'undefined' && _picking && typeof _pickStop === 'function') _pickStop();
+  } catch (_) {}
+  try {
+    if (except !== 'align' && typeof alignMode !== 'undefined' && alignMode && typeof cancelAlign === 'function') cancelAlign();
+  } catch (_) {}
+  try {
+    if (except !== 'measure' && typeof measuring !== 'undefined' && measuring) {
+      const t = document.getElementById('toggleMeasure'); if (t) t.click();
+    }
+  } catch (_) {}
+}
+
 // Desfer (undo)
 const undoStack = [];
 const MAX_UNDO = 20;
 
 function pushUndo(cloud, saveGeometry = false) {
   if (!cloud) return;
+  // FIX v2.33.2: si volem desfer una MUTACIÓ de la geometria (repair, projecció
+  // per plans, etc.), cal guardar una CÒPIA del Float32Array de posicions. Abans
+  // guardàvem la referència mateixa i, com que les operacions muten el buffer
+  // in-place amb setXYZ, el "snapshot" quedava mutat → undo no restaurava res.
+  let posSnapshot = null;
+  if (saveGeometry) {
+    const pos = cloud.geometry?.attributes?.position;
+    if (pos && pos.array) posSnapshot = new Float32Array(pos.array);
+  }
   undoStack.push({
     cloud,
     position: cloud.position.clone(),
     quaternion: cloud.quaternion.clone(),
-    geometry: saveGeometry ? cloud.geometry : null  // referència (no còpia)
+    posSnapshot,
   });
   if (undoStack.length > MAX_UNDO) undoStack.shift();
   updateUndoBtn();
@@ -595,9 +631,14 @@ function doUndo() {
   const cloud = state.cloud;
   cloud.position.copy(state.position);
   cloud.quaternion.copy(state.quaternion);
-  if (state.geometry && state.geometry !== cloud.geometry) {
-    cloud.geometry.dispose();
-    cloud.geometry = state.geometry;
+  if (state.posSnapshot && cloud.geometry?.attributes?.position) {
+    const pos = cloud.geometry.attributes.position;
+    if (pos.array.length === state.posSnapshot.length) {
+      pos.array.set(state.posSnapshot);
+      pos.needsUpdate = true;
+      cloud.geometry.computeBoundingBox();
+      cloud.geometry.computeBoundingSphere();
+    }
   }
   cloud.updateMatrixWorld(true);
   const box = cloud.userData.clipBox;
@@ -647,7 +688,9 @@ function init() {
   camera = new THREE.PerspectiveCamera(60, width / height, 0.01, 1e7);
   camera.position.set(0, 0, 5);
 
-  renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+  // preserveDrawingBuffer NO: duplicava el back-buffer permanentment (memòria extra
+  // notable a iPad). Cap funció actual el necessita (no fem toDataURL del canvas).
+  renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(width, height);
   renderer.localClippingEnabled = true;
@@ -992,6 +1035,7 @@ let _alignPrevControlsState = null;
 
 function startAlign(n) {
   if (measuring) return;
+  _exitExclusiveTools({ except: 'align' });
   const hasDXF = dxfOverlays.some(o => o.visible);
   // Necessitem 2 núvols O (1 núvol + un DXF de referència visible)
   if (clouds.length < 2 && !(clouds.length === 1 && hasDXF)) {
@@ -1788,6 +1832,10 @@ function _annTEnd(e) {
 }
 
 function startAnnotate() {
+  // FIX v2.33.2: idempotent. Si ja està activa, no tornem a afegir listeners
+  // (evita duplicats acumulats si algú crida startAnnotate dues vegades).
+  if (_annActive) return;
+  _exitExclusiveTools({ except: 'annotate' });
   _annActive = true;
   _annResize();
   const viewer = document.getElementById('viewer');
@@ -2219,6 +2267,7 @@ function _pickBlockNativeTouch(e) { if (_picking) { e.preventDefault(); e.stopPr
 function _pickStart() {
   if (_picking) { _pickStop(); return; }
   if (lassoErasing) _stopErase();   // no barregem amb l'esborrat
+  _exitExclusiveTools({ except: 'pick' });
   _picking = true;
   _pickPath = []; _pickDrawing = false;
   transformControls.detach();
@@ -4440,7 +4489,9 @@ function setupUI() {
 
   // ── Mode mesura ──
   document.getElementById('toggleMeasure').onclick = () => {
-    cancelAlign();
+    // Si activem mesura, aturem qualsevol altra eina exclusiva primer
+    if (!measuring) _exitExclusiveTools({ except: 'measure' });
+    else cancelAlign();
     measuring = !measuring;
     if (measuring) {
       transformControls.detach();
