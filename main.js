@@ -268,21 +268,73 @@ async function loadOBJ(file, companions) {
   return cloud;
 }
 
-async function loadGLB(file) {
-  const buf = await file.arrayBuffer();
-  const dv = new DataView(buf);
-  if (dv.getUint32(0, true) !== 0x46546C67) throw new Error('No és un fitxer GLB vàlid');
-  let offset = 12, jsonBuf = null, binBuf = null;
-  while (offset < buf.byteLength - 8) {
-    const chunkLen  = dv.getUint32(offset, true);
-    const chunkType = dv.getUint32(offset + 4, true);
-    offset += 8;
-    if      (chunkType === 0x4E4F534A) jsonBuf = buf.slice(offset, offset + chunkLen);
-    else if (chunkType === 0x004E4942) binBuf  = buf.slice(offset, offset + chunkLen);
-    offset += chunkLen;
+async function loadGLB(file, companions) {
+  const isGLTF = /\.gltf$/i.test(file.name);
+  let gltf, binBuf = null;
+  const externalImageBlobs = new Map();   // imageIndex → Blob (per a .gltf amb textures externes)
+
+  // Resol una uri relativa buscant al mapa "companions" (case-insensitive, per nom base i per camí relatiu)
+  function resolveCompanion(uri) {
+    if (!companions || !uri) return null;
+    const clean = decodeURI(uri).toLowerCase().replace(/^\.\//, '');
+    return companions.get(clean) || companions.get(clean.split('/').pop()) || null;
   }
-  if (!jsonBuf) throw new Error('Chunk JSON no trobat al GLB');
-  const gltf = JSON.parse(new TextDecoder().decode(jsonBuf));
+
+  if (isGLTF) {
+    gltf = JSON.parse(await file.text());
+    // Buffers externs (.bin). glTF admet múltiples buffers; els concatenem en ordre i reindexem bufferViews.
+    const bufs = gltf.buffers || [];
+    const parts = [];
+    const offsets = [];
+    let total = 0;
+    for (const b of bufs) {
+      offsets.push(total);
+      let ab;
+      if (b.uri && b.uri.startsWith('data:')) {
+        ab = await (await fetch(b.uri)).arrayBuffer();
+      } else if (b.uri) {
+        const f = resolveCompanion(b.uri);
+        if (!f) throw new Error('Falta el fitxer .bin extern: ' + b.uri + ' (puja el .gltf junt amb el .bin i les textures, o selecciona la carpeta sencera)');
+        ab = await f.arrayBuffer();
+      } else {
+        throw new Error('Buffer sense uri en .gltf no suportat');
+      }
+      parts.push(new Uint8Array(ab));
+      total += ab.byteLength;
+    }
+    const merged = new Uint8Array(total);
+    parts.forEach((p, i) => merged.set(p, offsets[i]));
+    binBuf = merged.buffer;
+    // Reindexa bufferViews perquè apuntin al buffer concatenat
+    for (const bv of gltf.bufferViews || []) {
+      bv.byteOffset = (bv.byteOffset || 0) + offsets[bv.buffer || 0];
+      bv.buffer = 0;
+    }
+    // Precarrega imatges externes com a Blobs
+    const imgs = gltf.images || [];
+    for (let i = 0; i < imgs.length; i++) {
+      const img = imgs[i];
+      if (img.uri && !img.uri.startsWith('data:') && img.bufferView == null) {
+        const f = resolveCompanion(img.uri);
+        if (f) externalImageBlobs.set(i, f);
+      }
+    }
+  } else {
+    const buf = await file.arrayBuffer();
+    const dv = new DataView(buf);
+    if (dv.getUint32(0, true) !== 0x46546C67) throw new Error('No és un fitxer GLB vàlid');
+    let offset = 12, jsonBuf = null;
+    while (offset < buf.byteLength - 8) {
+      const chunkLen  = dv.getUint32(offset, true);
+      const chunkType = dv.getUint32(offset + 4, true);
+      offset += 8;
+      if      (chunkType === 0x4E4F534A) jsonBuf = buf.slice(offset, offset + chunkLen);
+      else if (chunkType === 0x004E4942) binBuf  = buf.slice(offset, offset + chunkLen);
+      offset += chunkLen;
+    }
+    if (!jsonBuf) throw new Error('Chunk JSON no trobat al GLB');
+    gltf = JSON.parse(new TextDecoder().decode(jsonBuf));
+  }
   const dvb = binBuf ? new DataView(binBuf) : null;
 
   // Llegeix un accessor respectant byteStride (entrellaçat) i normalització
@@ -329,8 +381,10 @@ async function loadGLB(file) {
       blob = new Blob([binBuf.slice(start, start + bv.byteLength)], { type: img.mimeType || 'image/png' });
     } else if (img.uri && img.uri.startsWith('data:')) {
       blob = await (await fetch(img.uri)).blob();
+    } else if (externalImageBlobs.has(imageIndex)) {
+      blob = externalImageBlobs.get(imageIndex);
     } else {
-      return null;   // textura externa (uri a fitxer): no disponible en pujar només el GLB
+      return null;   // textura externa no aportada
     }
     try {
       const bmp = await createImageBitmap(blob);
@@ -4061,7 +4115,7 @@ function setupUI() {
           if      (ext === 'ply')                cloud = await loadPLY(file);
           else if (ext === 'xyz' || ext === 'txt') cloud = await loadXYZ(file);
           else if (ext === 'obj')                cloud = await loadOBJ(file, companions);
-          else if (ext === 'glb' || ext === 'gltf') cloud = await loadGLB(file);
+          else if (ext === 'glb' || ext === 'gltf') cloud = await loadGLB(file, companions);
           else { alert(T.unsupported(ext)); continue; }
         } catch (err) {
           console.error('Error carregant núvol:', err);
