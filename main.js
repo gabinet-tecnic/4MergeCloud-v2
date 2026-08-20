@@ -433,8 +433,8 @@ async function loadGLB(file, companions) {
 
   const allPos = [], allCol = [];
   let anyCol = false, sampledTex = false, sawTexture = false;
-  const DENSIFY_TARGET = 800000;   // punts densificats objectiu per primitive amb triangles
-  const MAX_PER_TRI    = 4000;
+  const DENSIFY_TARGET = 300000;   // punts densificats objectiu per primitive amb triangles
+  const MAX_PER_TRI    = 2000;
   for (const mesh of gltf.meshes || []) {
     for (const prim of mesh.primitives || []) {
       const posIdx = prim.attributes?.POSITION;
@@ -941,7 +941,13 @@ function onWindowResize() {
 // ─────────────────────────────────────────────
 function adaptPointSize(cloud) {
   cloud.material.sizeAttenuation = false;
-  cloud.material.size = 3;
+  const n = cloud.geometry?.attributes?.position?.count || 0;
+  // Ajusta la mida per no provocar solapament ("confeti") en núvols molt densos
+  let size = 3;
+  if      (n > 1_500_000) size = 1;
+  else if (n >   500_000) size = 1.5;
+  else if (n >   200_000) size = 2;
+  cloud.material.size = size;
   cloud.material.needsUpdate = true;
 }
 
