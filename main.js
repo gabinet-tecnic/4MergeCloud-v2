@@ -431,6 +431,43 @@ async function loadGLB(file, companions) {
     return id;
   }
 
+  // Textura THREE.js reutilitzable (per la vista "Malla")
+  const _tex3DCache = new Map();
+  async function getThreeTexture(texIndex) {
+    if (_tex3DCache.has(texIndex)) return _tex3DCache.get(texIndex);
+    const src = gltf.textures?.[texIndex]?.source;
+    let tex = null;
+    if (src != null) {
+      const img = gltf.images?.[src];
+      let blob = null;
+      if (img?.bufferView != null && binBuf) {
+        const bv = gltf.bufferViews[img.bufferView];
+        const start = bv.byteOffset || 0;
+        blob = new Blob([binBuf.slice(start, start + bv.byteLength)], { type: img.mimeType || 'image/png' });
+      } else if (img?.uri && img.uri.startsWith('data:')) {
+        blob = await (await fetch(img.uri)).blob();
+      } else if (externalImageBlobs.has(src)) {
+        blob = externalImageBlobs.get(src);
+      }
+      if (blob) {
+        try {
+          const bmp = await createImageBitmap(blob);
+          tex = new THREE.Texture(bmp);
+          tex.flipY = false;   // convenció glTF
+          tex.colorSpace = THREE.SRGBColorSpace;
+          tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+          tex.needsUpdate = true;
+        } catch (_) {}
+      }
+    }
+    _tex3DCache.set(texIndex, tex);
+    return tex;
+  }
+
+  const meshGroup = new THREE.Group();
+  meshGroup.name = '__mesh_view__';
+  meshGroup.visible = false;
+
   const allPos = [], allCol = [];
   let anyCol = false, sampledTex = false, sawTexture = false;
   const DENSIFY_TARGET = 300000;   // punts densificats objectiu per primitive amb triangles
@@ -481,6 +518,41 @@ async function loadGLB(file, companions) {
         if (flatColor) return flatColor;
         return null;
       }
+
+      // ── Vista "Malla": construeix un THREE.Mesh amb aquesta primitive
+      try {
+        const meshGeo = new THREE.BufferGeometry();
+        const posArr = new Float32Array(pos.count * 3);
+        for (let i = 0; i < pos.count; i++) {
+          posArr[i*3]   = pos.data[i*pos.comp];
+          posArr[i*3+1] = pos.data[i*pos.comp+1];
+          posArr[i*3+2] = pos.data[i*pos.comp+2];
+        }
+        meshGeo.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
+        if (uv && uv.count === pos.count) {
+          const uvArr = new Float32Array(pos.count * 2);
+          for (let i = 0; i < pos.count; i++) { uvArr[i*2] = uv.data[i*uv.comp]; uvArr[i*2+1] = uv.data[i*uv.comp+1]; }
+          meshGeo.setAttribute('uv', new THREE.BufferAttribute(uvArr, 2));
+        }
+        if (vcol) {
+          meshGeo.setAttribute('color', new THREE.BufferAttribute(vcol.slice(), 3));
+        }
+        if (prim.indices != null) {
+          const idx = readIndices(prim.indices);
+          meshGeo.setIndex(new THREE.BufferAttribute(idx, 1));
+        }
+        meshGeo.computeVertexNormals();
+        let meshMat;
+        if (bct) {
+          const tex3d = await getThreeTexture(bct.index);
+          meshMat = new THREE.MeshBasicMaterial({ map: tex3d, side: THREE.DoubleSide, color: 0xffffff, vertexColors: !!vcol });
+        } else if (vcol) {
+          meshMat = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide });
+        } else {
+          meshMat = new THREE.MeshBasicMaterial({ color: pbr?.baseColorFactor ? new THREE.Color(baseF[0], baseF[1], baseF[2]) : 0xcccccc, side: THREE.DoubleSide });
+        }
+        meshGroup.add(new THREE.Mesh(meshGeo, meshMat));
+      } catch (_) { /* si algo falla amb la malla, seguim amb els punts */ }
 
       // 1) Emet vèrtexs originals
       for (let i = 0; i < pos.count; i++) {
@@ -567,6 +639,10 @@ async function loadGLB(file, companions) {
   diag('GLB ' + file.name + ': ' + (allPos.length/3) + ' punts · color: ' + colSrc);
   const cloud = new THREE.Points(geo, mat);
   cloud.name = file.name;
+  if (meshGroup.children.length > 0) {
+    cloud.add(meshGroup);
+    cloud.userData.meshView = meshGroup;
+  }
   return cloud;
 }
 
@@ -4778,6 +4854,24 @@ function updateCloudList() {
     eye.title = cloud.visible ? 'Ocultar' : 'Mostrar';
     eye.onclick = (e) => { e.stopPropagation(); cloud.visible = !cloud.visible; updateCloudList(); _syncMergeBtn(); };
 
+    // Botó Malla / Núvol (només si el fitxer porta malla — GLB/GLTF)
+    let meshBtn = null;
+    if (cloud.userData?.meshView) {
+      meshBtn = document.createElement('span');
+      meshBtn.className = 'cloud-eye';
+      const meshOn = cloud.userData.meshView.visible;
+      meshBtn.textContent = meshOn ? '▦' : '⋯';
+      meshBtn.title = meshOn ? 'Veure com a núvol de punts' : 'Veure com a malla texturada';
+      meshBtn.style.marginRight = '4px';
+      meshBtn.onclick = (e) => {
+        e.stopPropagation();
+        const mv = cloud.userData.meshView;
+        mv.visible = !mv.visible;
+        cloud.material.visible = !mv.visible;   // amaga els punts quan es veu la malla
+        updateCloudList();
+      };
+    }
+
     const del = document.createElement('span');
     del.className = 'cloud-del';
     del.textContent = '✕';
@@ -4786,6 +4880,7 @@ function updateCloudList() {
 
     item.appendChild(name);
     item.appendChild(pts);
+    if (meshBtn) item.appendChild(meshBtn);
     item.appendChild(eye);
     item.appendChild(del);
     item.onclick = () => selectCloud(cloud);
