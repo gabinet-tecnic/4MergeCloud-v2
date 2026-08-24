@@ -1036,20 +1036,26 @@ function updateClipPlanes() {
   // Es creen els plans un sol cop i després es MUTEN in-place (sense recompilar);
   // només es marca needsUpdate quan canvia el NOMBRE de plans (activa/desactiva clipping).
   clouds.forEach(cloud => {
-    const mat = cloud.material;
-    if (!mat) return;
+    // Recull tots els materials afectats: el del núvol + els de la vista malla si existeix
+    const materials = [];
+    if (cloud.material) materials.push(cloud.material);
+    if (cloud.userData?.meshView) {
+      cloud.userData.meshView.traverse(o => { if (o.isMesh && o.material) materials.push(o.material); });
+    }
     const box = cloud.userData.clipBox;
-    if (!box) {
-      if (mat.clippingPlanes && mat.clippingPlanes.length) { mat.clippingPlanes = []; mat.needsUpdate = true; }
-      return;
-    }
-    box.updateMatrixWorld(true);
-    if (!mat.clippingPlanes || mat.clippingPlanes.length !== LOCAL_CLIP_PLANES.length) {
-      mat.clippingPlanes = LOCAL_CLIP_PLANES.map(() => new THREE.Plane());
-      mat.needsUpdate = true;   // només quan (re)apareix el clipping
-    }
-    for (let i = 0; i < LOCAL_CLIP_PLANES.length; i++) {
-      mat.clippingPlanes[i].copy(LOCAL_CLIP_PLANES[i]).applyMatrix4(box.matrixWorld);
+    for (const mat of materials) {
+      if (!box) {
+        if (mat.clippingPlanes && mat.clippingPlanes.length) { mat.clippingPlanes = []; mat.needsUpdate = true; }
+        continue;
+      }
+      box.updateMatrixWorld(true);
+      if (!mat.clippingPlanes || mat.clippingPlanes.length !== LOCAL_CLIP_PLANES.length) {
+        mat.clippingPlanes = LOCAL_CLIP_PLANES.map(() => new THREE.Plane());
+        mat.needsUpdate = true;
+      }
+      for (let i = 0; i < LOCAL_CLIP_PLANES.length; i++) {
+        mat.clippingPlanes[i].copy(LOCAL_CLIP_PLANES[i]).applyMatrix4(box.matrixWorld);
+      }
     }
   });
 }
@@ -1065,6 +1071,11 @@ function removeClipBox() {
   cloud.userData.boxRelMatrix = null;
   cloud.material.clippingPlanes = [];
   cloud.material.needsUpdate = true;
+  if (cloud.userData?.meshView) {
+    cloud.userData.meshView.traverse(o => {
+      if (o.isMesh && o.material) { o.material.clippingPlanes = []; o.material.needsUpdate = true; }
+    });
+  }
   if (selectedCloud) transformControls.attach(selectedCloud);
   else transformControls.detach();
   // Torna al mode del núvol
