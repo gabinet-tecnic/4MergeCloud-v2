@@ -5387,6 +5387,28 @@ function mergeCloudsInScene() {
   const merged = new THREE.Points(geo, mat);
   merged.name = 'Núvol unit';
 
+  // Preserva la vista de MALLA de tots els núvols units, aplicant la seva
+  // matriu de món a les geometries perquè el resultat quedi coherent amb
+  // el núvol combinat. Els materials (i les seves textures) es reutilitzen.
+  const mergedMeshGroup = new THREE.Group();
+  mergedMeshGroup.name = '__mesh_view__';
+  mergedMeshGroup.visible = false;
+  const mergedGlbList = [];
+  for (const c of list) {
+    if (c.userData?.glbBytes) mergedGlbList.push(c.userData.glbBytes);
+    const mv = c.userData?.meshView;
+    if (!mv) continue;
+    mv.updateWorldMatrix(true, true);
+    mv.traverse(o => {
+      if (o.isMesh && o.geometry) {
+        o.updateWorldMatrix(true, false);
+        const g = o.geometry.clone();
+        g.applyMatrix4(o.matrixWorld);
+        mergedMeshGroup.add(new THREE.Mesh(g, o.material));
+      }
+    });
+  }
+
   // Desenganxa el gizmo abans de destruir els núvols antics (evita que quedi apuntant a un objecte destruït)
   if (transformControls) transformControls.detach();
 
@@ -5413,6 +5435,11 @@ function mergeCloudsInScene() {
   if (!clouds.includes(selectedCloud)) selectedCloud = null;
 
   adaptPointSize(merged);
+  if (mergedMeshGroup.children.length > 0) {
+    merged.add(mergedMeshGroup);
+    merged.userData.meshView = mergedMeshGroup;
+  }
+  if (mergedGlbList.length > 0) merged.userData.glbBytesList = mergedGlbList;
   scene.add(merged);
   clouds.push(merged);
   selectableObjects.push(merged);
