@@ -271,6 +271,7 @@ async function loadOBJ(file, companions) {
 async function loadGLB(file, companions) {
   const isGLTF = /\.gltf$/i.test(file.name);
   let gltf, binBuf = null;
+  let rawGlbBytes = null;   // conservem el fitxer original per poder reconstruir la vista de malla en reobrir el projecte
   const externalImageBlobs = new Map();   // imageIndex → Blob (per a .gltf amb textures externes)
 
   // Resol una uri relativa buscant al mapa "companions" (case-insensitive, per nom base i per camí relatiu)
@@ -321,6 +322,7 @@ async function loadGLB(file, companions) {
     }
   } else {
     const buf = await file.arrayBuffer();
+    rawGlbBytes = new Uint8Array(buf.slice(0));
     const dv = new DataView(buf);
     if (dv.getUint32(0, true) !== 0x46546C67) throw new Error('No és un fitxer GLB vàlid');
     let offset = 12, jsonBuf = null;
@@ -643,7 +645,29 @@ async function loadGLB(file, companions) {
     cloud.add(meshGroup);
     cloud.userData.meshView = meshGroup;
   }
+  if (rawGlbBytes) cloud.userData.glbBytes = rawGlbBytes;
   return cloud;
+}
+
+// Reconstrueix la vista de malla d'un núvol restaurat (projecte .4mc o sessió),
+// si conserva els bytes del GLB original.
+async function attachMeshFromGlb(cloud) {
+  const bytes = cloud.userData?.glbBytes;
+  if (!bytes || cloud.userData.meshView) return;
+  try {
+    const name = cloud.name || 'restored.glb';
+    const f = new File([bytes], name, { type: 'model/gltf-binary' });
+    const rebuilt = await loadGLB(f, null);
+    const mv = rebuilt.userData?.meshView;
+    if (mv) {
+      cloud.add(mv);
+      cloud.userData.meshView = mv;
+      updateClipPlanes();
+      updateCloudList();
+    }
+    rebuilt.geometry?.dispose?.();
+    rebuilt.material?.dispose?.();
+  } catch (e) { diag('⚠ malla no reconstruïda: ' + e.message); }
 }
 
 // ── Textos UI (CA / EN) ──────────────────────────────────────────────────────
@@ -5469,6 +5493,7 @@ function _serializeCloud(cloud) {
     sizeAttenuation: cloud.material?.sizeAttenuation ?? false,   // clau: sense això els punts es veien com a blobs de món
     pos: pos ? pos.array.slice(0) : null,
     col: col ? col.array.slice(0) : null,
+    glb: cloud.userData?.glbBytes || null,   // per poder reconstruir la vista de malla
   };
 }
 function _deserializeCloud(d) {
@@ -5489,6 +5514,7 @@ function _deserializeCloud(d) {
     cloud.matrix.fromArray(d.matrix);
     cloud.matrix.decompose(cloud.position, cloud.quaternion, cloud.scale);
   }
+  if (d.glb) cloud.userData.glbBytes = d.glb instanceof Uint8Array ? d.glb : new Uint8Array(d.glb);
   return cloud;
 }
 
@@ -5526,6 +5552,7 @@ async function restoreSession() {
       for (const cd of data.clouds) {
         const cloud = _deserializeCloud(cd);
         scene.add(cloud); clouds.push(cloud); selectableObjects.push(cloud);
+        if (cloud.userData?.glbBytes) attachMeshFromGlb(cloud);
       }
       const last = clouds[clouds.length - 1];
       selectCloud(last);
@@ -5553,12 +5580,26 @@ function _b64ToF32(b64) {
   for (let i = 0; i < s.length; i++) bytes[i] = s.charCodeAt(i);
   return new Float32Array(bytes.buffer);
 }
+function _u8ToB64(u8) {
+  if (!u8) return null;
+  let s = '';
+  const CH = 0x8000;
+  for (let i = 0; i < u8.length; i += CH) s += String.fromCharCode.apply(null, u8.subarray(i, i + CH));
+  return btoa(s);
+}
+function _b64ToU8(b64) {
+  if (!b64) return null;
+  const s = atob(b64);
+  const bytes = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) bytes[i] = s.charCodeAt(i);
+  return bytes;
+}
 function saveProject() {
   if (clouds.length === 0 && !(_ed2d && _ed2d.count().walls)) { alert('No hi ha res per desar encara. Carrega un núvol o dibuixa una planta.'); return; }
   const s = _collectSession();
   const data = {
     format: '4mc-project', version: 1, t: s.t,
-    clouds: s.clouds.map(c => ({ name: c.name, visible: c.visible, matrix: c.matrix, size: c.size, pos: _f32ToB64(c.pos), col: c.col ? _f32ToB64(c.col) : null })),
+    clouds: s.clouds.map(c => ({ name: c.name, visible: c.visible, matrix: c.matrix, size: c.size, pos: _f32ToB64(c.pos), col: c.col ? _f32ToB64(c.col) : null, glb: c.glb ? _u8ToB64(c.glb) : null })),
     drawing: s.drawing,
   };
   const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
@@ -5574,8 +5615,9 @@ async function loadProject(file) {
   const data = JSON.parse(await file.text());
   if (!data || data.format !== '4mc-project') throw new Error('No és un projecte .4mc vàlid');
   for (const cd of (data.clouds || [])) {
-    const cloud = _deserializeCloud({ name: cd.name, visible: cd.visible, matrix: cd.matrix, size: cd.size, pos: _b64ToF32(cd.pos), col: cd.col ? _b64ToF32(cd.col) : null });
+    const cloud = _deserializeCloud({ name: cd.name, visible: cd.visible, matrix: cd.matrix, size: cd.size, pos: _b64ToF32(cd.pos), col: cd.col ? _b64ToF32(cd.col) : null, glb: cd.glb ? _b64ToU8(cd.glb) : null });
     scene.add(cloud); clouds.push(cloud); selectableObjects.push(cloud);
+    if (cloud.userData?.glbBytes) attachMeshFromGlb(cloud);
   }
   if (data.drawing) {
     try { localStorage.setItem('mc_editor_state', JSON.stringify(data.drawing)); if (_ed2d) _ed2d.setState(data.drawing); } catch (_) {}
