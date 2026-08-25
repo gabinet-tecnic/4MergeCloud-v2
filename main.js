@@ -392,7 +392,8 @@ async function loadGLB(file, companions) {
 
   // Decodifica una imatge i deixa un ImageBitmap + ImageData compartits (reduint memòria)
   // reduccio: el bitmap per a la textura es reescala a MAX_TEX_SIZE per no petar mòbil.
-  const MAX_TEX_SIZE = 2048;
+  // 1024 permet obrir 3+ GLBs alhora a iPad Safari sense esgotar la memòria de GPU.
+  const MAX_TEX_SIZE = 1024;
   const _decodedImg = new Map();   // imageIndex → { bmpMesh, imgData }
   async function _decodeOnce(imageIndex) {
     if (_decodedImg.has(imageIndex)) return _decodedImg.get(imageIndex);
