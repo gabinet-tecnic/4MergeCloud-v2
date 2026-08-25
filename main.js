@@ -390,10 +390,15 @@ async function loadGLB(file, companions) {
     return out;
   }
 
-  // Decodifica una imatge del GLB (bufferView incrustat o data URI) → ImageData per mostrejar
-  async function decodeImage(imageIndex) {
+  // Decodifica una imatge i deixa un ImageBitmap + ImageData compartits (reduint memòria)
+  // reduccio: el bitmap per a la textura es reescala a MAX_TEX_SIZE per no petar mòbil.
+  const MAX_TEX_SIZE = 2048;
+  const _decodedImg = new Map();   // imageIndex → { bmpMesh, imgData }
+  async function _decodeOnce(imageIndex) {
+    if (_decodedImg.has(imageIndex)) return _decodedImg.get(imageIndex);
     const img = gltf.images?.[imageIndex];
-    if (!img) return null;
+    let out = { bmpMesh: null, imgData: null };
+    if (!img) { _decodedImg.set(imageIndex, out); return out; }
     let blob;
     if (img.bufferView != null && binBuf) {
       const bv = gltf.bufferViews[img.bufferView];
@@ -404,16 +409,31 @@ async function loadGLB(file, companions) {
     } else if (externalImageBlobs.has(imageIndex)) {
       blob = externalImageBlobs.get(imageIndex);
     } else {
-      return null;   // textura externa no aportada
+      _decodedImg.set(imageIndex, out); return out;
     }
     try {
       const bmp = await createImageBitmap(blob);
-      const cv = document.createElement('canvas'); cv.width = bmp.width; cv.height = bmp.height;
-      const c2 = cv.getContext('2d', { willReadFrequently: true }); c2.drawImage(bmp, 0, 0);
-      const id = c2.getImageData(0, 0, cv.width, cv.height);
-      bmp.close?.();
-      return id;
-    } catch (_) { return null; }
+      // 1) ImageData per mostrejar el color dels punts (a resolució completa perquè el mostreig sigui fidel)
+      try {
+        const cv = document.createElement('canvas'); cv.width = bmp.width; cv.height = bmp.height;
+        const c2 = cv.getContext('2d', { willReadFrequently: true }); c2.drawImage(bmp, 0, 0);
+        out.imgData = c2.getImageData(0, 0, cv.width, cv.height);
+      } catch (_) {}
+      // 2) Bitmap reescalat per a la textura de la malla (limita memòria de GPU en mòbils)
+      const maxDim = Math.max(bmp.width, bmp.height);
+      if (maxDim > MAX_TEX_SIZE) {
+        const scale = MAX_TEX_SIZE / maxDim;
+        const w = Math.max(1, Math.round(bmp.width * scale));
+        const h = Math.max(1, Math.round(bmp.height * scale));
+        try { out.bmpMesh = await createImageBitmap(bmp, { resizeWidth: w, resizeHeight: h, resizeQuality: 'high' }); }
+        catch (_) { out.bmpMesh = bmp; }
+      } else {
+        out.bmpMesh = bmp;
+      }
+      if (out.bmpMesh !== bmp) bmp.close?.();
+    } catch (_) {}
+    _decodedImg.set(imageIndex, out);
+    return out;
   }
   // mostreig bilineal simple (nearest) amb wrap repeat i V invertida (convenció glTF)
   function sampleTex(id, u, v) {
@@ -424,42 +444,25 @@ async function loadGLB(file, companions) {
     const o = (y * id.width + x) * 4;
     return [id.data[o] / 255, id.data[o + 1] / 255, id.data[o + 2] / 255];
   }
-  const _texCache = new Map();
   async function getTexImageData(texIndex) {
-    if (_texCache.has(texIndex)) return _texCache.get(texIndex);
     const src = gltf.textures?.[texIndex]?.source;
-    const id = (src != null) ? await decodeImage(src) : null;
-    _texCache.set(texIndex, id);
-    return id;
+    if (src == null) return null;
+    const { imgData } = await _decodeOnce(src);
+    return imgData;
   }
-
-  // Textura THREE.js reutilitzable (per la vista "Malla")
   const _tex3DCache = new Map();
   async function getThreeTexture(texIndex) {
     if (_tex3DCache.has(texIndex)) return _tex3DCache.get(texIndex);
     const src = gltf.textures?.[texIndex]?.source;
     let tex = null;
     if (src != null) {
-      const img = gltf.images?.[src];
-      let blob = null;
-      if (img?.bufferView != null && binBuf) {
-        const bv = gltf.bufferViews[img.bufferView];
-        const start = bv.byteOffset || 0;
-        blob = new Blob([binBuf.slice(start, start + bv.byteLength)], { type: img.mimeType || 'image/png' });
-      } else if (img?.uri && img.uri.startsWith('data:')) {
-        blob = await (await fetch(img.uri)).blob();
-      } else if (externalImageBlobs.has(src)) {
-        blob = externalImageBlobs.get(src);
-      }
-      if (blob) {
-        try {
-          const bmp = await createImageBitmap(blob);
-          tex = new THREE.Texture(bmp);
-          tex.flipY = false;   // convenció glTF
-          tex.colorSpace = THREE.SRGBColorSpace;
-          tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-          tex.needsUpdate = true;
-        } catch (_) {}
+      const { bmpMesh } = await _decodeOnce(src);
+      if (bmpMesh) {
+        tex = new THREE.Texture(bmpMesh);
+        tex.flipY = false;
+        tex.colorSpace = THREE.SRGBColorSpace;
+        tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+        tex.needsUpdate = true;
       }
     }
     _tex3DCache.set(texIndex, tex);
@@ -472,8 +475,8 @@ async function loadGLB(file, companions) {
 
   const allPos = [], allCol = [];
   let anyCol = false, sampledTex = false, sawTexture = false;
-  const DENSIFY_TARGET = 300000;   // punts densificats objectiu per primitive amb triangles
-  const MAX_PER_TRI    = 2000;
+  const DENSIFY_TARGET = 200000;   // punts densificats objectiu per primitive amb triangles
+  const MAX_PER_TRI    = 1500;
   for (const mesh of gltf.meshes || []) {
     for (const prim of mesh.primitives || []) {
       const posIdx = prim.attributes?.POSITION;
