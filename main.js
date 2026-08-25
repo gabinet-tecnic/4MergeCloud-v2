@@ -5404,10 +5404,20 @@ function mergeCloudsInScene() {
     mv.updateWorldMatrix(true, true);
     mv.traverse(o => {
       if (o.isMesh && o.geometry) {
-        o.updateWorldMatrix(true, false);
+        o.updateMatrixWorld(true);
         const g = o.geometry.clone();
         g.applyMatrix4(o.matrixWorld);
-        mergedMeshGroup.add(new THREE.Mesh(g, o.material));
+        // Material nou per aïllar-nos del cicle de vida del núvol origen
+        const src = o.material || {};
+        const hasVCol = !!src.vertexColors && !!g.getAttribute('color');
+        const baseCol = src.color?.clone?.() || new THREE.Color(0xffffff);
+        const newMat = new THREE.MeshBasicMaterial({
+          map: src.map || null,
+          color: baseCol,
+          vertexColors: hasVCol,
+          side: THREE.DoubleSide,
+        });
+        mergedMeshGroup.add(new THREE.Mesh(g, newMat));
       }
     });
   }
