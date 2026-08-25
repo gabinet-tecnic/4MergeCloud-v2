@@ -392,7 +392,8 @@ async function loadGLB(file, companions) {
 
   // Decodifica una imatge i deixa un ImageBitmap + ImageData compartits (reduint memòria)
   // reduccio: el bitmap per a la textura es reescala a MAX_TEX_SIZE per no petar mòbil.
-  const MAX_TEX_SIZE = 2048;
+  // 1024 permet obrir 3+ GLBs alhora a iPad Safari sense esgotar la memòria de GPU.
+  const MAX_TEX_SIZE = 1024;
   const _decodedImg = new Map();   // imageIndex → { bmpMesh, imgData }
   async function _decodeOnce(imageIndex) {
     if (_decodedImg.has(imageIndex)) return _decodedImg.get(imageIndex);
@@ -5404,10 +5405,20 @@ function mergeCloudsInScene() {
     mv.updateWorldMatrix(true, true);
     mv.traverse(o => {
       if (o.isMesh && o.geometry) {
-        o.updateWorldMatrix(true, false);
+        o.updateMatrixWorld(true);
         const g = o.geometry.clone();
         g.applyMatrix4(o.matrixWorld);
-        mergedMeshGroup.add(new THREE.Mesh(g, o.material));
+        // Material nou per aïllar-nos del cicle de vida del núvol origen
+        const src = o.material || {};
+        const hasVCol = !!src.vertexColors && !!g.getAttribute('color');
+        const baseCol = src.color?.clone?.() || new THREE.Color(0xffffff);
+        const newMat = new THREE.MeshBasicMaterial({
+          map: src.map || null,
+          color: baseCol,
+          vertexColors: hasVCol,
+          side: THREE.DoubleSide,
+        });
+        mergedMeshGroup.add(new THREE.Mesh(g, newMat));
       }
     });
   }
