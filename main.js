@@ -653,6 +653,51 @@ async function loadGLB(file, companions) {
   return cloud;
 }
 
+// Reconstrueix la vista de MALLA d'un núvol unit a partir de la llista de GLBs originals
+// i les seves matrius de món al moment d'unir. Genera un grup amb totes les malles amb
+// les matrius aplicades, tal com fa mergeCloudsInScene.
+async function attachMergedMeshFromGlbs(cloud) {
+  const list = cloud.userData?.glbBytesList;
+  if (!list || !list.length || cloud.userData.meshView) return;
+  const meshGroup = new THREE.Group();
+  meshGroup.name = '__mesh_view__';
+  meshGroup.visible = false;
+  for (const entry of list) {
+    const bytes = entry?.bytes; const matArr = entry?.matrix;
+    if (!bytes) continue;
+    try {
+      const f = new File([bytes], cloud.name || 'restored.glb', { type: 'model/gltf-binary' });
+      const rebuilt = await loadGLB(f, null);
+      const mv = rebuilt.userData?.meshView;
+      if (mv) {
+        const wm = new THREE.Matrix4();
+        if (Array.isArray(matArr) && matArr.length === 16) wm.fromArray(matArr);
+        mv.traverse(o => {
+          if (o.isMesh && o.geometry) {
+            const g = o.geometry.clone();
+            g.applyMatrix4(wm);
+            const src = o.material || {};
+            const hasVCol = !!src.vertexColors && !!g.getAttribute('color');
+            const baseCol = src.color?.clone?.() || new THREE.Color(0xffffff);
+            const newMat = new THREE.MeshBasicMaterial({
+              map: src.map || null, color: baseCol, vertexColors: hasVCol, side: THREE.DoubleSide,
+            });
+            meshGroup.add(new THREE.Mesh(g, newMat));
+          }
+        });
+      }
+      rebuilt.geometry?.dispose?.();
+      rebuilt.material?.dispose?.();
+    } catch (e) { diag('⚠ malla unida no reconstruïda: ' + e.message); }
+  }
+  if (meshGroup.children.length > 0) {
+    cloud.add(meshGroup);
+    cloud.userData.meshView = meshGroup;
+    updateClipPlanes();
+    updateCloudList();
+  }
+}
+
 // Reconstrueix la vista de malla d'un núvol restaurat (projecte .4mc o sessió),
 // si conserva els bytes del GLB original.
 async function attachMeshFromGlb(cloud) {
@@ -5459,7 +5504,10 @@ function mergeCloudsInScene() {
   mergedMeshGroup.visible = false;
   const mergedGlbList = [];
   for (const c of list) {
-    if (c.userData?.glbBytes) mergedGlbList.push(c.userData.glbBytes);
+    if (c.userData?.glbBytes) {
+      c.updateWorldMatrix(true, false);
+      mergedGlbList.push({ bytes: c.userData.glbBytes, matrix: c.matrixWorld.clone() });
+    }
     const mv = c.userData?.meshView;
     if (!mv) continue;
     mv.updateWorldMatrix(true, true);
@@ -5595,6 +5643,9 @@ function _serializeCloud(cloud) {
     pos: pos ? pos.array.slice(0) : null,
     col: col ? col.array.slice(0) : null,
     glb: cloud.userData?.glbBytes || null,   // per poder reconstruir la vista de malla
+    glbList: cloud.userData?.glbBytesList
+      ? cloud.userData.glbBytesList.map(e => ({ bytes: e.bytes, matrix: Array.from(e.matrix.elements) }))
+      : null,   // per reconstruir la malla d'un núvol unit
   };
 }
 function _deserializeCloud(d) {
@@ -5616,6 +5667,14 @@ function _deserializeCloud(d) {
     cloud.matrix.decompose(cloud.position, cloud.quaternion, cloud.scale);
   }
   if (d.glb) cloud.userData.glbBytes = d.glb instanceof Uint8Array ? d.glb : new Uint8Array(d.glb);
+  if (d.glbList && Array.isArray(d.glbList) && d.glbList.length) {
+    cloud.userData.glbBytesList = d.glbList.map(e => {
+      const bytes = e.bytes instanceof Uint8Array ? e.bytes : new Uint8Array(e.bytes || []);
+      const mat = new THREE.Matrix4();
+      if (Array.isArray(e.matrix) && e.matrix.length === 16) mat.fromArray(e.matrix);
+      return { bytes, matrix: mat };
+    });
+  }
   return cloud;
 }
 
@@ -5653,7 +5712,8 @@ async function restoreSession() {
       for (const cd of data.clouds) {
         const cloud = _deserializeCloud(cd);
         scene.add(cloud); clouds.push(cloud); selectableObjects.push(cloud);
-        if (cloud.userData?.glbBytes) attachMeshFromGlb(cloud);
+        if (cloud.userData?.glbBytesList) attachMergedMeshFromGlbs(cloud);
+        else if (cloud.userData?.glbBytes) attachMeshFromGlb(cloud);
       }
       const last = clouds[clouds.length - 1];
       selectCloud(last);
@@ -5700,7 +5760,12 @@ function saveProject() {
   const s = _collectSession();
   const data = {
     format: '4mc-project', version: 1, t: s.t,
-    clouds: s.clouds.map(c => ({ name: c.name, visible: c.visible, matrix: c.matrix, size: c.size, pos: _f32ToB64(c.pos), col: c.col ? _f32ToB64(c.col) : null, glb: c.glb ? _u8ToB64(c.glb) : null })),
+    clouds: s.clouds.map(c => ({
+      name: c.name, visible: c.visible, matrix: c.matrix, size: c.size,
+      pos: _f32ToB64(c.pos), col: c.col ? _f32ToB64(c.col) : null,
+      glb: c.glb ? _u8ToB64(c.glb) : null,
+      glbList: c.glbList ? c.glbList.map(e => ({ bytes: _u8ToB64(e.bytes), matrix: e.matrix })) : null,
+    })),
     drawing: s.drawing,
   };
   const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
@@ -5716,9 +5781,15 @@ async function loadProject(file) {
   const data = JSON.parse(await file.text());
   if (!data || data.format !== '4mc-project') throw new Error('No és un projecte .4mc vàlid');
   for (const cd of (data.clouds || [])) {
-    const cloud = _deserializeCloud({ name: cd.name, visible: cd.visible, matrix: cd.matrix, size: cd.size, pos: _b64ToF32(cd.pos), col: cd.col ? _b64ToF32(cd.col) : null, glb: cd.glb ? _b64ToU8(cd.glb) : null });
+    const cloud = _deserializeCloud({
+      name: cd.name, visible: cd.visible, matrix: cd.matrix, size: cd.size,
+      pos: _b64ToF32(cd.pos), col: cd.col ? _b64ToF32(cd.col) : null,
+      glb: cd.glb ? _b64ToU8(cd.glb) : null,
+      glbList: cd.glbList ? cd.glbList.map(e => ({ bytes: _b64ToU8(e.bytes), matrix: e.matrix })) : null,
+    });
     scene.add(cloud); clouds.push(cloud); selectableObjects.push(cloud);
-    if (cloud.userData?.glbBytes) attachMeshFromGlb(cloud);
+    if (cloud.userData?.glbBytesList) attachMergedMeshFromGlbs(cloud);
+    else if (cloud.userData?.glbBytes) attachMeshFromGlb(cloud);
   }
   if (data.drawing) {
     try { localStorage.setItem('mc_editor_state', JSON.stringify(data.drawing)); if (_ed2d) _ed2d.setState(data.drawing); } catch (_) {}
