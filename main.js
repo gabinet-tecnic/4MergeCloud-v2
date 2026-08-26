@@ -4145,6 +4145,51 @@ document.addEventListener('keydown', e => {
 });
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Retalla una THREE.Mesh in-place: només conserva els triangles que tenen
+// els TRES vèrtexs dins de TOTS els plans (plans donats en coords de món).
+// Preserva l'atribut UV. Elimina l'índex (queda com a geometria no-indexada).
+function _cropMeshWithPlanes(mesh, worldPlanes) {
+  const g = mesh.geometry;
+  const posAttr = g.getAttribute('position');
+  if (!posAttr) return;
+  const uvAttr = g.getAttribute('uv');
+  const colAttr = g.getAttribute('color');
+  const idx = g.getIndex();
+  mesh.updateMatrixWorld(true);
+  const mw = mesh.matrixWorld;
+  const triCount = idx ? Math.floor(idx.count / 3) : Math.floor(posAttr.count / 3);
+  const outPos = [], outUv = uvAttr ? [] : null, outCol = colAttr ? [] : null;
+  const v = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
+  const loc = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
+  for (let t = 0; t < triCount; t++) {
+    const i0 = idx ? idx.getX(t*3)   : t*3;
+    const i1 = idx ? idx.getX(t*3+1) : t*3+1;
+    const i2 = idx ? idx.getX(t*3+2) : t*3+2;
+    loc[0].fromBufferAttribute(posAttr, i0); v[0].copy(loc[0]).applyMatrix4(mw);
+    loc[1].fromBufferAttribute(posAttr, i1); v[1].copy(loc[1]).applyMatrix4(mw);
+    loc[2].fromBufferAttribute(posAttr, i2); v[2].copy(loc[2]).applyMatrix4(mw);
+    let keep = true;
+    for (const p of worldPlanes) {
+      if (p.distanceToPoint(v[0]) < 0 || p.distanceToPoint(v[1]) < 0 || p.distanceToPoint(v[2]) < 0) { keep = false; break; }
+    }
+    if (!keep) continue;
+    outPos.push(loc[0].x, loc[0].y, loc[0].z, loc[1].x, loc[1].y, loc[1].z, loc[2].x, loc[2].y, loc[2].z);
+    if (outUv) { outUv.push(uvAttr.getX(i0), uvAttr.getY(i0), uvAttr.getX(i1), uvAttr.getY(i1), uvAttr.getX(i2), uvAttr.getY(i2)); }
+    if (outCol) {
+      outCol.push(colAttr.getX(i0), colAttr.getY(i0), colAttr.getZ(i0),
+                  colAttr.getX(i1), colAttr.getY(i1), colAttr.getZ(i1),
+                  colAttr.getX(i2), colAttr.getY(i2), colAttr.getZ(i2));
+    }
+  }
+  const ng = new THREE.BufferGeometry();
+  ng.setAttribute('position', new THREE.Float32BufferAttribute(outPos, 3));
+  if (outUv)  ng.setAttribute('uv',    new THREE.Float32BufferAttribute(outUv, 2));
+  if (outCol) ng.setAttribute('color', new THREE.Float32BufferAttribute(outCol, 3));
+  ng.computeBoundingBox(); ng.computeBoundingSphere();
+  try { g.dispose(); } catch (_) {}
+  mesh.geometry = ng;
+}
+
 function applyAndKeepClip() {
   const { cloud, box } = _findClipBoxOwner();
   if (!cloud || !box) { alert(T.noBoxCreated); return; }
@@ -4182,6 +4227,21 @@ function applyAndKeepClip() {
   cloud.geometry = newGeom;
   cloud.material.clippingPlanes = [];
   cloud.material.needsUpdate = true;
+
+  // També retallem la MALLA texturada (si n'hi ha), quedant-nos només els
+  // triangles totalment dins de la caixa. Preserva UVs i material.
+  if (cloud.userData?.meshView) {
+    const toRemove = [];
+    cloud.userData.meshView.traverse(o => {
+      if (o.isMesh && o.geometry) {
+        _cropMeshWithPlanes(o, planes);
+        const p = o.geometry.getAttribute('position');
+        if (!p || p.count === 0) toRemove.push(o);
+        if (o.material) { o.material.clippingPlanes = []; o.material.needsUpdate = true; }
+      }
+    });
+    for (const o of toRemove) { o.parent?.remove(o); o.geometry?.dispose?.(); }
+  }
 
   // Eliminem la caixa
   removeClipBox();
