@@ -5757,10 +5757,9 @@ function _b64ToU8(b64) {
   for (let i = 0; i < s.length; i++) bytes[i] = s.charCodeAt(i);
   return bytes;
 }
-function saveProject() {
-  if (clouds.length === 0 && !(_ed2d && _ed2d.count().walls)) { alert('No hi ha res per desar encara. Carrega un núvol o dibuixa una planta.'); return; }
+function _buildProjectData() {
   const s = _collectSession();
-  const data = {
+  return {
     format: '4mc-project', version: 1, t: s.t,
     clouds: s.clouds.map(c => ({
       name: c.name, visible: c.visible, matrix: c.matrix, size: c.size,
@@ -5770,6 +5769,18 @@ function saveProject() {
     })),
     drawing: s.drawing,
   };
+}
+// Retorna el projecte serialitzat com a Blob + nom suggerit — útil per pujar-lo a Drive.
+window.buildProjectBlob = function () {
+  if (clouds.length === 0 && !(_ed2d && _ed2d.count().walls)) { alert('No hi ha res per desar encara. Carrega un núvol o dibuixa una planta.'); return null; }
+  const data = _buildProjectData();
+  const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+  const name = 'projecte_' + new Date().toISOString().slice(0, 10) + '.4mc';
+  return { blob, name };
+};
+function saveProject() {
+  if (clouds.length === 0 && !(_ed2d && _ed2d.count().walls)) { alert('No hi ha res per desar encara. Carrega un núvol o dibuixa una planta.'); return; }
+  const data = _buildProjectData();
   const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
