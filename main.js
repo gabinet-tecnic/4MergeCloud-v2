@@ -4494,6 +4494,8 @@ function setupUI() {
   }
 
   fileInput.addEventListener('change', (e) => handleFiles(e.target.files));
+  // Exposa handleFiles perquè scripts externs (drive.js) puguin passar-hi fitxers descarregats
+  try { window.handleFiles = handleFiles; } catch (_) {}
   const dirInput = document.getElementById('dirInput');
   if (dirInput) dirInput.addEventListener('change', (e) => handleFiles(e.target.files));
 
