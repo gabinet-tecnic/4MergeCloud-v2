@@ -40,13 +40,20 @@
       try {
         const tc = ensureTokenClient();
         tc.callback = (resp) => {
-          if (resp.error) { reject(new Error(resp.error)); return; }
+          if (resp.error) { reject(new Error(resp.error_description || resp.error)); return; }
           accessToken = resp.access_token;
           resolve(resp.access_token);
         };
-        // Si ja tenim un token vàlid, l'aprofitem
+        tc.error_callback = (err) => {
+          const type = err?.type || 'error';
+          if (type === 'popup_closed' || type === 'popup_failed_to_open') {
+            reject(new Error('Cal permetre la finestra emergent de Google i acceptar els permisos'));
+          } else {
+            reject(new Error(err?.message || type));
+          }
+        };
         if (accessToken) return resolve(accessToken);
-        tc.requestAccessToken({ prompt: '' });
+        tc.requestAccessToken();
       } catch (e) { reject(e); }
     });
   }
