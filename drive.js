@@ -6,7 +6,9 @@
 (function () {
   const CLIENT_ID = '66166800696-qbbqsktu87paiq0bg2a35n16fm3itj20.apps.googleusercontent.com';
   const API_KEY   = 'AIzaSyASZGSd9gaen43vS6mWMAyNXevQOmSMxdA';
-  const SCOPES    = 'https://www.googleapis.com/auth/drive.readonly';
+  // drive.file: pot llegir/escriure NOMÉS els fitxers que l'usuari tria al Picker
+  // o els que l'app crea. Mai no veu la resta del Drive — molt més segur que drive.readonly.
+  const SCOPES    = 'https://www.googleapis.com/auth/drive.file';
 
   let tokenClient = null;
   let accessToken = null;
@@ -121,10 +123,82 @@
     }
   }
 
+  // Selecciona una carpeta del Drive amb el Picker (filtre només carpetes)
+  async function pickFolder(token) {
+    await loadPicker();
+    return new Promise((resolve) => {
+      const view = new google.picker.DocsView(google.picker.ViewId.FOLDERS)
+        .setSelectFolderEnabled(true)
+        .setIncludeFolders(true)
+        .setMimeTypes('application/vnd.google-apps.folder');
+      const picker = new google.picker.PickerBuilder()
+        .setOAuthToken(token)
+        .setDeveloperKey(API_KEY)
+        .setAppId(CLIENT_ID.split('-')[0])
+        .addView(view)
+        .setTitle('Tria una carpeta del Drive on desar el projecte')
+        .setCallback((data) => {
+          if (data.action === google.picker.Action.PICKED) {
+            resolve(data.docs?.[0] || null);
+          } else if (data.action === google.picker.Action.CANCEL) {
+            resolve(null);
+          }
+        })
+        .build();
+      picker.setVisible(true);
+    });
+  }
+
+  // Puja un Blob nou al Drive dins d'una carpeta
+  async function uploadToDrive(name, blob, folderId) {
+    const metadata = {
+      name,
+      mimeType: 'application/json',
+      parents: folderId ? [folderId] : undefined,
+    };
+    const boundary = 'boundary_' + Math.random().toString(36).slice(2);
+    const delimiter = `\r\n--${boundary}\r\n`;
+    const closeDelim = `\r\n--${boundary}--`;
+    const metaPart = 'Content-Type: application/json; charset=UTF-8\r\n\r\n' + JSON.stringify(metadata);
+    const bodyPrefix = delimiter + metaPart + delimiter + `Content-Type: ${blob.type || 'application/octet-stream'}\r\n\r\n`;
+    const body = new Blob([bodyPrefix, blob, closeDelim], { type: `multipart/related; boundary=${boundary}` });
+    const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + accessToken },
+      body,
+    });
+    if (!res.ok) throw new Error('Error pujant a Drive: ' + res.status + ' ' + (await res.text()).slice(0, 200));
+    return res.json();
+  }
+
+  async function saveToDrive() {
+    try {
+      if (typeof window.buildProjectBlob !== 'function') {
+        alert('L\'app encara no està preparada. Recarrega la pàgina.');
+        return;
+      }
+      const info = window.buildProjectBlob();
+      if (!info) return;   // res per desar
+      const token = await requestToken();
+      const folder = await pickFolder(token);
+      if (!folder) return;   // cancel·lat
+      log('pujant "' + info.name + '" a carpeta ' + (folder.name || folder.id));
+      const uploaded = await uploadToDrive(info.name, info.blob, folder.id);
+      const link = uploaded.webViewLink || 'https://drive.google.com/file/d/' + uploaded.id;
+      if (confirm('Projecte desat al Drive com a "' + uploaded.name + '".\n\nVols obrir-lo al Drive per compartir-lo?')) {
+        window.open(link, '_blank');
+      }
+    } catch (e) {
+      log('error save: ' + e.message);
+      alert('Google Drive: ' + e.message);
+    }
+  }
+
   function bindButton() {
-    const btn = document.getElementById('tbDrive');
-    if (!btn) return;
-    btn.addEventListener('click', openFromDrive);
+    const btnOpen = document.getElementById('tbDrive');
+    if (btnOpen) btnOpen.addEventListener('click', openFromDrive);
+    const btnSave = document.getElementById('tbDriveSave');
+    if (btnSave) btnSave.addEventListener('click', saveToDrive);
   }
 
   if (document.readyState === 'loading') {
