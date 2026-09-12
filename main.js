@@ -4917,6 +4917,7 @@ function setupUI() {
     btn3d.classList.add('ortho-active');
   };
   orthoBtn('viewA_top',   new THREE.Vector3( 0, 1, 0), new THREE.Vector3(0, 0,-1));
+  orthoBtn('viewA_ceil',  new THREE.Vector3( 0,-1, 0), new THREE.Vector3(0, 0, 1));
   orthoBtn('viewA_front', new THREE.Vector3( 0, 0, 1), new THREE.Vector3(0, 1, 0));
   orthoBtn('viewA_back',  new THREE.Vector3( 0, 0,-1), new THREE.Vector3(0, 1, 0));
   orthoBtn('viewA_right', new THREE.Vector3( 1, 0, 0), new THREE.Vector3(0, 1, 0));
