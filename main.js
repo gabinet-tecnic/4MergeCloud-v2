@@ -823,6 +823,10 @@ let orthoCamera = null;
 let orthoControls = null;
 let useOrtho = false;
 
+// Widget del punt d'òrbita (estil Polycam)
+let pivotMarker = null;
+let pivotSetMode = false;
+
 const clouds = [];
 let selectedCloud = null;
 let cloudTCMode = 'translate';
@@ -1007,6 +1011,12 @@ function init() {
   transformControls.setSize(0.7);
   transformControls.setMode('translate');
   scene.add(transformControls);
+
+  // Marcador del punt d'òrbita (estil Polycam): tres eixos + anell, sempre
+  // visible (depthTest=false). Es reposiciona i s'escala cada frame a
+  // updatePivotMarker() perquè mantingui una mida constant a pantalla.
+  pivotMarker = _createPivotMarker();
+  scene.add(pivotMarker);
 
   transformControls.addEventListener('dragging-changed', (e) => {
     if (e.value) {
@@ -5145,6 +5155,52 @@ function _dxfPickWithSnap(mouseNdc, cam) {
   return null;
 }
 
+// ── Punt d'òrbita (widget estil Polycam) ────────────────────────────────
+function _createPivotMarker() {
+  const g = new THREE.Group();
+  g.name = '__pivot_marker__';
+  const axisMat = (c) => new THREE.LineBasicMaterial({ color: c, depthTest: false, transparent: true, opacity: 0.95 });
+  const line = (a, b, c) => {
+    const geo = new THREE.BufferGeometry().setFromPoints([a, b]);
+    const l = new THREE.Line(geo, axisMat(c));
+    l.renderOrder = 999;
+    return l;
+  };
+  g.add(line(new THREE.Vector3(-1,0,0), new THREE.Vector3(1,0,0), 0xff5566));
+  g.add(line(new THREE.Vector3(0,-1,0), new THREE.Vector3(0,1,0), 0x55dd55));
+  g.add(line(new THREE.Vector3(0,0,-1), new THREE.Vector3(0,0,1), 0x5588ff));
+  const ringGeo = new THREE.RingGeometry(1.1, 1.25, 40);
+  const ringMat = new THREE.MeshBasicMaterial({
+    color: 0x66ccff, side: THREE.DoubleSide,
+    transparent: true, opacity: 0.75, depthTest: false,
+  });
+  const ring = new THREE.Mesh(ringGeo, ringMat);
+  ring.renderOrder = 999;
+  ring.name = '__pivot_ring__';
+  g.add(ring);
+  return g;
+}
+
+function updatePivotMarker() {
+  if (!pivotMarker) return;
+  const cam = useOrtho ? orthoCamera : camera;
+  const target = useOrtho ? (orthoControls && orthoControls.target) : (controls && controls.target);
+  if (!cam || !target) return;
+  pivotMarker.position.copy(target);
+  // Escala segons la distància perquè es vegi sempre igual a pantalla
+  let dist;
+  if (useOrtho) {
+    dist = (orthoCamera.top - orthoCamera.bottom) * 0.5;
+  } else {
+    dist = cam.position.distanceTo(target);
+  }
+  const s = Math.max(0.001, dist * 0.02);
+  pivotMarker.scale.set(s, s, s);
+  // L'anell mira sempre a càmera
+  const ring = pivotMarker.getObjectByName('__pivot_ring__');
+  if (ring) ring.lookAt(cam.position);
+}
+
 // Quan estem en vista ortogonal mirant amunt (vista SO — sostre),
 // la primera intersecció del raig és la superfície més propera a la càmera
 // (el terra), però visualment l'usuari veu i clica el sostre (més llunyà del
@@ -5174,6 +5230,26 @@ function onPointerDown(event) {
   mouse.set(nx, ny);
 
   const activeCam = useOrtho ? orthoCamera : camera;
+
+  // ── Fixar punt d'òrbita ──
+  if (pivotSetMode) {
+    raycaster.setFromCamera(mouse, activeCam);
+    const hits = raycaster.intersectObjects(clouds, false);
+    if (hits.length > 0) {
+      const hit = _pickVisibleHit(hits, activeCam);
+      const p = (hit.index != null && hit.object.geometry?.attributes?.position)
+        ? new THREE.Vector3().fromBufferAttribute(hit.object.geometry.attributes.position, hit.index).applyMatrix4(hit.object.matrixWorld)
+        : hit.point.clone();
+      const c = useOrtho ? orthoControls : controls;
+      c.target.copy(p);
+      c.update();
+    }
+    pivotSetMode = false;
+    const btn = document.getElementById('tbPivot');
+    if (btn) btn.classList.remove('active');
+    renderer.domElement.style.cursor = '';
+    return;
+  }
 
   // ── Mode alineació ──
   if (alignMode) {
@@ -6569,6 +6645,11 @@ function initTopUI() {
       if (b) { const t = b.textContent; b.textContent = '✓ Projecte desat'; setTimeout(() => { b.textContent = t; }, 1600); }
     } catch (e) { diag('⚠ desar projecte ha fallat: ' + e.message); alert('No s\'ha pogut desar el projecte: ' + e.message); }
   });
+  document.getElementById('tbPivot')?.addEventListener('click', (e) => {
+    pivotSetMode = !pivotSetMode;
+    e.currentTarget.classList.toggle('active', pivotSetMode);
+    renderer.domElement.style.cursor = pivotSetMode ? 'crosshair' : '';
+  });
 }
 
 // ── Panell de diagnòstic ──
@@ -7118,6 +7199,7 @@ function animate() {
     }
     updateClipPlanes();
     updateGizmo();
+    updatePivotMarker();
 
     const { w: W, h: H } = _viewerSize();
     const camA = useOrtho ? orthoCamera : camera;
