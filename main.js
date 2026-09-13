@@ -5145,6 +5145,23 @@ function _dxfPickWithSnap(mouseNdc, cam) {
   return null;
 }
 
+// Quan estem en vista ortogonal mirant amunt (vista SO — sostre),
+// la primera intersecció del raig és la superfície més propera a la càmera
+// (el terra), però visualment l'usuari veu i clica el sostre (més llunyà del
+// punt de vista de baix). Aquest helper tria el hit correcte segons la direcció
+// de la càmera. En qualsevol altra vista manté el comportament habitual (el primer).
+function _pickVisibleHit(hits, cam) {
+  if (!hits || hits.length === 0) return null;
+  if (hits.length === 1) return hits[0];
+  if (useOrtho && cam) {
+    const d = new THREE.Vector3();
+    cam.getWorldDirection(d);
+    // Si la càmera mira amunt (component Y positiva), agafem l'últim hit
+    if (d.y > 0.5) return hits[hits.length - 1];
+  }
+  return hits[0];
+}
+
 function onPointerDown(event) {
   if (_ed2dActive) return;   // durant el dibuix, l'editor + navegació tàctil ho gestionen tot
   const ctrl = document.getElementById('controls');
@@ -5189,7 +5206,10 @@ function onPointerDown(event) {
     raycaster.setFromCamera(mouse, activeCam);
     const hits = raycaster.intersectObjects(clouds, false);
     if (hits.length === 0) return;
-    const hit = hits[0];
+    // En vista ortogonal mirant amunt (SO), la primera intersecció és el terra
+    // però visualment l'usuari clica al sostre — agafem el hit MÉS ALLUNYAT
+    // de la càmera perquè coincideixi amb el que veu.
+    const hit = _pickVisibleHit(hits, activeCam);
     let pWorld;
     if (hit.index != null && hit.object.geometry?.attributes?.position) {
       pWorld = new THREE.Vector3()
