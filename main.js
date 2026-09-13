@@ -1012,10 +1012,11 @@ function init() {
   transformControls.setMode('translate');
   scene.add(transformControls);
 
-  // Marcador del punt d'òrbita (estil Polycam): tres eixos + anell, sempre
-  // visible (depthTest=false). Es reposiciona i s'escala cada frame a
-  // updatePivotMarker() perquè mantingui una mida constant a pantalla.
+  // Marcador del punt d'òrbita: només visible mentre l'usuari està en mode
+  // "fixar òrbita" (després d'haver clicat el botó 🎯 Òrbita), per no
+  // distreure durant la navegació habitual.
   pivotMarker = _createPivotMarker();
+  pivotMarker.visible = false;
   scene.add(pivotMarker);
 
   transformControls.addEventListener('dragging-changed', (e) => {
@@ -5155,6 +5156,23 @@ function _dxfPickWithSnap(mouseNdc, cam) {
   return null;
 }
 
+// Retorna els objectes contra els quals fer raycast en modes que interactuen
+// amb la geometria visible (mesura, alineació, fixar òrbita). Si un núvol té
+// vista de malla activa (des d'un GLB), s'inclouen els Meshes perquè el clic
+// caigui a la superfície visible; en cas contrari s'inclou el núvol de punts.
+function _pickTargets() {
+  const out = [];
+  for (const c of clouds) {
+    const mv = c.userData?.meshView;
+    if (mv && mv.visible) {
+      mv.traverse(o => { if (o.isMesh) out.push(o); });
+    } else if (c.material?.visible !== false) {
+      out.push(c);
+    }
+  }
+  return out;
+}
+
 // ── Punt d'òrbita (widget estil Polycam) ────────────────────────────────
 function _createPivotMarker() {
   const g = new THREE.Group();
@@ -5183,6 +5201,8 @@ function _createPivotMarker() {
 
 function updatePivotMarker() {
   if (!pivotMarker) return;
+  pivotMarker.visible = pivotSetMode;
+  if (!pivotSetMode) return;
   const cam = useOrtho ? orthoCamera : camera;
   const target = useOrtho ? (orthoControls && orthoControls.target) : (controls && controls.target);
   if (!cam || !target) return;
@@ -5234,10 +5254,10 @@ function onPointerDown(event) {
   // ── Fixar punt d'òrbita ──
   if (pivotSetMode) {
     raycaster.setFromCamera(mouse, activeCam);
-    const hits = raycaster.intersectObjects(clouds, false);
+    const hits = raycaster.intersectObjects(_pickTargets(), true);
     if (hits.length > 0) {
       const hit = _pickVisibleHit(hits, activeCam);
-      const p = (hit.index != null && hit.object.geometry?.attributes?.position)
+      const p = (hit.object.isPoints && hit.index != null && hit.object.geometry?.attributes?.position)
         ? new THREE.Vector3().fromBufferAttribute(hit.object.geometry.attributes.position, hit.index).applyMatrix4(hit.object.matrixWorld)
         : hit.point.clone();
       const c = useOrtho ? orthoControls : controls;
@@ -5254,12 +5274,12 @@ function onPointerDown(event) {
   // ── Mode alineació ──
   if (alignMode) {
     raycaster.setFromCamera(mouse, activeCam);
-    // 1r intent: raycast contra els núvols de punts
-    const hits = raycaster.intersectObjects(clouds, false);
+    // 1r intent: raycast contra els núvols de punts o la malla visible
+    const hits = raycaster.intersectObjects(_pickTargets(), true);
     if (hits.length > 0) {
       const hit = hits[0];
       let pWorld;
-      if (hit.index != null && hit.object.geometry?.attributes?.position) {
+      if (hit.object.isPoints && hit.index != null && hit.object.geometry?.attributes?.position) {
         pWorld = new THREE.Vector3()
           .fromBufferAttribute(hit.object.geometry.attributes.position, hit.index)
           .applyMatrix4(hit.object.matrixWorld);
@@ -5280,14 +5300,14 @@ function onPointerDown(event) {
   // ── Mode mesura ──
   if (measuring) {
     raycaster.setFromCamera(mouse, activeCam);
-    const hits = raycaster.intersectObjects(clouds, false);
+    const hits = raycaster.intersectObjects(_pickTargets(), true);
     if (hits.length === 0) return;
     // En vista ortogonal mirant amunt (SO), la primera intersecció és el terra
     // però visualment l'usuari clica al sostre — agafem el hit MÉS ALLUNYAT
     // de la càmera perquè coincideixi amb el que veu.
     const hit = _pickVisibleHit(hits, activeCam);
     let pWorld;
-    if (hit.index != null && hit.object.geometry?.attributes?.position) {
+    if (hit.object.isPoints && hit.index != null && hit.object.geometry?.attributes?.position) {
       pWorld = new THREE.Vector3()
         .fromBufferAttribute(hit.object.geometry.attributes.position, hit.index)
         .applyMatrix4(hit.object.matrixWorld);
