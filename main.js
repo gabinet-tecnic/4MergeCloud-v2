@@ -5229,10 +5229,16 @@ function updatePivotMarker() {
 function _pickVisibleHit(hits, cam) {
   if (!hits || hits.length === 0) return null;
   if (hits.length === 1) return hits[0];
+  // Prioritat: si hi ha alguna intersecció amb una malla (Mesh), la primera
+  // ja és el punt visible (les malles tenen culling per material.side).
+  // Només aplica la lògica "SO agafa el més llunyà" per intersects amb núvols
+  // de punts, que no tenen concept de cara i s'ordenen només per distància.
+  const firstMesh = hits.find(h => h.object && h.object.isMesh);
+  if (firstMesh) return firstMesh;
   if (useOrtho && cam) {
     const d = new THREE.Vector3();
     cam.getWorldDirection(d);
-    // Si la càmera mira amunt (component Y positiva), agafem l'últim hit
+    // Si la càmera mira amunt (component Y positiva), agafem l'últim hit dels punts
     if (d.y > 0.5) return hits[hits.length - 1];
   }
   return hits[0];
