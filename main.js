@@ -4475,7 +4475,7 @@ function setupUI() {
   fileInput.value = '';
   let _loading = false;
 
-  const CLOUD_EXTS = ['ply', 'xyz', 'txt', 'obj', 'glb', 'gltf'];
+  const CLOUD_EXTS = ['ply', 'xyz', 'txt', 'obj', 'glb', 'gltf', 'fbx'];
 
   // Signatura del darrer conjunt de fitxers processat, per rebutjar duplicats
   // consecutius (l'iPad Safari a vegades dispara 'change' més d'una vegada).
@@ -4521,7 +4521,7 @@ function setupUI() {
       return;
     }
     const cloudFiles = files.filter(f => CLOUD_EXTS.includes(f.name.split('.').pop().toLowerCase()));
-    if (cloudFiles.length === 0) { _loading = false; alert('No he trobat cap núvol (.ply .xyz .obj .glb) entre els fitxers.'); return; }
+    if (cloudFiles.length === 0) { _loading = false; alert('No he trobat cap núvol (.ply .xyz .obj .glb .fbx) entre els fitxers.'); return; }
     const badge = document.getElementById('loadingBadge');
     try {
       for (const file of cloudFiles) {
