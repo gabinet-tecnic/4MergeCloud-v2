@@ -6006,12 +6006,14 @@ async function _renderLibraryGrid(folder, prefix) {
   const hint = document.getElementById(prefix + 'LibraryHint');
   const status = document.getElementById(prefix + 'LibraryStatus');
   const refresh = document.getElementById(prefix + 'LibraryRefresh');
+  const empty = document.getElementById(prefix + 'LibraryEmpty');
   if (!grid) return;
-  hint.style.display = 'none';
+  if (hint) hint.style.display = 'none';
+  if (empty) empty.style.display = 'none';
   grid.style.display = 'none';
   status.style.display = 'block';
   status.textContent = 'Carregant biblioteca…';
-  refresh.style.display = 'inline-block';
+  if (refresh) refresh.style.display = 'inline-block';
   try {
     const files = await window.MCDrive.listLibraryFiles(folder);
     // Filtra només els formats que sabem obrir
@@ -6073,39 +6075,45 @@ function initLibraryUI() {
   const MC = window.MCDrive;
   if (!MC) return;   // drive.js encara no ha carregat
 
+  async function choose(prefix) {
+    try {
+      const folder = await MC.chooseLibraryFolder();
+      if (!folder) return;
+      const titleEl = document.getElementById(prefix + 'LibraryTitle');
+      if (titleEl) titleEl.textContent = 'Biblioteca: ' + folder.name;
+      const empty = document.getElementById(prefix + 'LibraryEmpty');
+      if (empty) empty.style.display = 'none';
+      const changeBtn = document.getElementById(prefix + 'LibraryChoose');
+      if (changeBtn) { changeBtn.textContent = 'Canviar carpeta'; changeBtn.style.display = 'inline-block'; }
+      await _renderLibraryGrid(folder, prefix);
+    } catch (e) { alert('Google Drive: ' + e.message); }
+  }
+
   // Cablat per un panell concret ('w' del welcome o 'm' del modal)
   function wire(prefix) {
-    const chooseBtn = document.getElementById(prefix + 'LibraryChoose');
-    const refresh = document.getElementById(prefix + 'LibraryRefresh');
-    const titleEl = document.getElementById(prefix + 'LibraryTitle');
-    if (!chooseBtn) return;
-    chooseBtn.addEventListener('click', async () => {
-      try {
-        const folder = await MC.chooseLibraryFolder();
-        if (!folder) return;
-        if (titleEl) titleEl.textContent = 'Biblioteca: ' + folder.name;
-        chooseBtn.textContent = 'Canviar carpeta';
-        await _renderLibraryGrid(folder, prefix);
-      } catch (e) { alert('Google Drive: ' + e.message); }
-    });
-    refresh?.addEventListener('click', () => {
+    document.getElementById(prefix + 'LibraryChoose')?.addEventListener('click', () => choose(prefix));
+    document.getElementById(prefix + 'LibraryChooseBig')?.addEventListener('click', () => choose(prefix));
+    document.getElementById(prefix + 'LibraryRefresh')?.addEventListener('click', () => {
       const f = MC.getLibraryFolder();
       if (f) _renderLibraryGrid(f, prefix);
     });
-    // Auto-càrrega si ja hi ha carpeta configurada
+    // Si ja hi ha carpeta configurada, prepara els textos
     const f = MC.getLibraryFolder();
     if (f) {
+      const titleEl = document.getElementById(prefix + 'LibraryTitle');
       if (titleEl) titleEl.textContent = 'Biblioteca: ' + f.name;
-      chooseBtn.textContent = 'Canviar carpeta';
+      const empty = document.getElementById(prefix + 'LibraryEmpty');
+      if (empty) empty.style.display = 'none';
+      const changeBtn = document.getElementById(prefix + 'LibraryChoose');
+      if (changeBtn) { changeBtn.textContent = 'Canviar carpeta'; changeBtn.style.display = 'inline-block'; }
     }
   }
   wire('w');
   wire('m');
-  // Auto-càrrega inicial de la graella al welcome (només)
   const initial = MC.getLibraryFolder();
   if (initial) _renderLibraryGrid(initial, 'w').catch(() => {});
 
-  // Botó Biblioteca a la barra superior obre el modal (i carrega si cal)
+  // Botó Biblioteca a la barra superior obre el modal
   const tbBtn = document.getElementById('tbLibrary');
   const modal = document.getElementById('libraryModal');
   if (tbBtn && modal) {
@@ -6113,10 +6121,9 @@ function initLibraryUI() {
       modal.style.display = 'flex';
       const f = MC.getLibraryFolder();
       if (f) {
-        try { await _renderLibraryGrid(f, 'm'); } catch (_) {}
+        try { await _renderLibraryGrid(f, 'm'); } catch (e) { console.error('biblioteca:', e); }
       }
     });
-    // Clicar fora del contingut tanca el modal
     modal.addEventListener('click', (e) => {
       if (e.target === modal) modal.style.display = 'none';
     });

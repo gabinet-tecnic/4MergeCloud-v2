@@ -1073,19 +1073,34 @@
 
     <!-- Welcome screen -->
     <!-- Modal Biblioteca (accessible en qualsevol moment des de la barra superior) -->
-    <div id="libraryModal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(8,10,15,0.85);align-items:center;justify-content:center;padding:30px">
-      <div style="background:#12141d;border:1px solid #262b38;border-radius:8px;padding:22px;max-width:900px;width:100%;max-height:80vh;overflow:auto;position:relative">
-        <button style="position:absolute;top:8px;right:12px;background:none;border:none;color:#889;font-size:22px;cursor:pointer" onclick="document.getElementById('libraryModal').style.display='none'">&#10005;</button>
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
-          <h2 style="font-size:18px;color:#ccd;margin:0">📁 <span id="mLibraryTitle">La meva biblioteca</span></h2>
+    <div id="libraryModal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(8,10,15,0.9);align-items:center;justify-content:center;padding:30px">
+      <div style="background:#12141d;border:1px solid #262b38;border-radius:10px;padding:26px;max-width:900px;width:100%;max-height:80vh;overflow:auto;position:relative">
+        <button style="position:absolute;top:10px;right:14px;background:none;border:none;color:#889;font-size:24px;cursor:pointer" onclick="document.getElementById('libraryModal').style.display='none'">&#10005;</button>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+          <h2 style="font-size:19px;color:#ddd;margin:0">📁 <span id="mLibraryTitle">La meva biblioteca d'escàners</span></h2>
           <div style="display:flex;gap:6px">
-            <button id="mLibraryChoose" style="font-size:11px;background:none;border:1px solid #2a2d40;color:#889;padding:6px 10px;border-radius:4px;cursor:pointer">Triar carpeta del Drive</button>
-            <button id="mLibraryRefresh" title="Refrescar" style="display:none;font-size:12px;background:none;border:1px solid #2a2d40;color:#889;padding:6px 10px;border-radius:4px;cursor:pointer">↻</button>
+            <button id="mLibraryChoose" style="display:none;font-size:11px;background:none;border:1px solid #2a2d40;color:#aab;padding:6px 10px;border-radius:4px;cursor:pointer">Canviar carpeta</button>
+            <button id="mLibraryRefresh" title="Refrescar" style="display:none;font-size:13px;background:none;border:1px solid #2a2d40;color:#aab;padding:6px 10px;border-radius:4px;cursor:pointer">↻</button>
           </div>
         </div>
-        <div id="mLibraryHint" style="font-size:12px;color:#556;line-height:1.6;padding:20px 0;text-align:center">Tria una carpeta del Google Drive per veure aquí els teus escàners.</div>
+
+        <!-- Estat buit (primera vegada, cap carpeta configurada) -->
+        <div id="mLibraryEmpty" style="padding:40px 20px;text-align:center">
+          <div style="font-size:48px;color:#334;margin-bottom:14px">📂</div>
+          <div style="font-size:15px;color:#ccd;font-weight:600;margin-bottom:8px">Configura la teva biblioteca</div>
+          <div style="font-size:12px;color:#889;line-height:1.6;margin-bottom:20px;max-width:460px;margin-left:auto;margin-right:auto">
+            Tria la carpeta del teu Google Drive on tens desats els escàners.<br>
+            A partir d'aleshores els veuràs aquí llistats amb miniatura i podràs obrir-los amb un clic.
+          </div>
+          <button id="mLibraryChooseBig" class="btn-orange" style="font-size:13px;padding:10px 20px;font-weight:600">🗂️ Triar carpeta del Drive</button>
+        </div>
+
+        <!-- Missatge d'informació (mentre es carrega) -->
+        <div id="mLibraryHint" style="display:none;font-size:12px;color:#889;line-height:1.6;padding:20px 0;text-align:center"></div>
+        <!-- Graella d'escàners -->
         <div id="mLibraryGrid" style="display:none;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px"></div>
-        <div id="mLibraryStatus" style="display:none;font-size:12px;color:#556;line-height:1.6;text-align:center;padding:30px 0"></div>
+        <!-- Estat de càrrega / error -->
+        <div id="mLibraryStatus" style="display:none;font-size:12px;color:#889;line-height:1.6;text-align:center;padding:30px 0"></div>
       </div>
     </div>
 
