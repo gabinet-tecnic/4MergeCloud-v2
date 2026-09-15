@@ -262,6 +262,28 @@ async function loadFBX(file) {
 
   if (allPositions.length === 0) throw new Error('L\'FBX no conté malles amb vèrtexs');
 
+  // Auto-detecció d'unitats: molts FBX (Scanner 3D, per exemple) venen en
+  // mil·límetres o centímetres. Si el bounding box és massa gran (>100 unitats
+  // que serien 100 metres — improbable per una escena típica), assumim mm i
+  // dividim per 1000 (o /100 si és rang cm 100-1000).
+  let bbMin = [Infinity, Infinity, Infinity], bbMax = [-Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < allPositions.length; i += 3) {
+    for (let k = 0; k < 3; k++) {
+      if (allPositions[i+k] < bbMin[k]) bbMin[k] = allPositions[i+k];
+      if (allPositions[i+k] > bbMax[k]) bbMax[k] = allPositions[i+k];
+    }
+  }
+  const maxDim = Math.max(bbMax[0]-bbMin[0], bbMax[1]-bbMin[1], bbMax[2]-bbMin[2]);
+  let scale = 1, unitNote = '';
+  if (maxDim > 1000) { scale = 0.001; unitNote = ' · mm→m'; }
+  else if (maxDim > 100) { scale = 0.01; unitNote = ' · cm→m'; }
+  if (scale !== 1) {
+    for (let i = 0; i < allPositions.length; i++) allPositions[i] *= scale;
+    // Apliquem la mateixa escala al grup de malles (visualment)
+    meshGroup.scale.set(scale, scale, scale);
+    meshGroup.updateMatrixWorld(true);
+  }
+
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(allPositions), 3));
   if (hasColors) geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(allColors), 3));
@@ -273,7 +295,7 @@ async function loadFBX(file) {
   // Per defecte mostrem la malla (com fa GLB)
   meshGroup.visible = true;
   cloud.material.visible = false;
-  diag('FBX ' + file.name + ': ' + (allPositions.length/3|0) + ' vèrtexs, ' + meshGroup.children.length + ' malles');
+  diag('FBX ' + file.name + ': ' + (allPositions.length/3|0) + ' vèrtexs, ' + meshGroup.children.length + ' malles' + unitNote);
   return cloud;
 }
 
