@@ -145,6 +145,11 @@
     .num-input {
       width: 100%; font-size: 11px; background: #1a1d28; color: #eee;
       border: 1px solid #252840; border-radius: 3px; padding: 3px 5px;
+      -moz-appearance: textfield; appearance: textfield;
+    }
+    .num-input::-webkit-outer-spin-button,
+    .num-input::-webkit-inner-spin-button {
+      -webkit-appearance: none; margin: 0;
     }
     #applyTransform { background: #e07820 !important; color: #fff !important; border-color: #f08830 !important; font-weight: 600 !important; margin-top: 4px; }
 
