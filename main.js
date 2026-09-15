@@ -5990,6 +5990,52 @@ function _formatFileSize(bytes) {
   if (mb < 1024) return mb.toFixed(1) + ' MB';
   return (mb / 1024).toFixed(2) + ' GB';
 }
+// ── Captura de miniatura del model actualment carregat ────────────────
+// Renderitza un frame i captura el canvas com a JPEG. La reduïm a 240×180
+// aprox. per encabir-la a localStorage sense petar el límit.
+function _captureViewerThumbnail(maxW) {
+  try {
+    if (!renderer || !scene) return null;
+    const cam = useOrtho ? orthoCamera : camera;
+    renderer.render(scene, cam);
+    const src = renderer.domElement.toDataURL('image/jpeg', 0.72);
+    return _downscaleDataURL(src, maxW || 240);
+  } catch (e) { console.warn('thumbnail capture failed:', e); return null; }
+}
+function _downscaleDataURL(dataUrl, maxW) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const ratio = maxW / img.width;
+      const w = maxW, h = Math.round(img.height * ratio);
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      const ctx = c.getContext('2d');
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(img, 0, 0, w, h);
+      resolve(c.toDataURL('image/jpeg', 0.6));
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
+}
+function _saveLibraryThumb(fileId, dataUrl) {
+  if (!fileId || !dataUrl) return;
+  try { localStorage.setItem('4mc_thumb_' + fileId, dataUrl); }
+  catch (e) { console.warn('thumb store failed:', e); }
+}
+function _getLibraryThumb(fileId) {
+  try { return localStorage.getItem('4mc_thumb_' + fileId); } catch (_) { return null; }
+}
+// Exposada per drive.js/biblioteca perquè capturi després d'obrir un fitxer
+window.MCCaptureThumb = async function(fileId, delayMs) {
+  await new Promise(r => setTimeout(r, delayMs || 2500));
+  const cap = _captureViewerThumbnail();
+  const url = cap instanceof Promise ? await cap : cap;
+  if (url) _saveLibraryThumb(fileId, url);
+  return url;
+};
+
 function _fileEmoji(name, mimeType) {
   const ext = (name || '').toLowerCase().split('.').pop();
   if (ext === 'glb' || ext === 'gltf') return '🧊';
@@ -6031,10 +6077,10 @@ async function _renderLibraryGrid(folder, prefix) {
       card.className = 'lib-card';
       const thumb = document.createElement('div');
       thumb.className = 'lib-thumb';
-      if (f.thumbnailLink) {
+      const cachedThumb = _getLibraryThumb(f.id);
+      if (cachedThumb) {
         const img = document.createElement('img');
-        img.src = f.thumbnailLink;
-        img.referrerPolicy = 'no-referrer';
+        img.src = cachedThumb;
         thumb.appendChild(img);
       } else {
         thumb.textContent = _fileEmoji(f.name, f.mimeType);
@@ -6058,6 +6104,8 @@ async function _renderLibraryGrid(folder, prefix) {
           if (welcome) welcome.style.display = 'none';
           const modal = document.getElementById('libraryModal');
           if (modal) modal.style.display = 'none';
+          // Captura una miniatura del model per veure-la la propera vegada
+          window.MCCaptureThumb?.(f.id, 2500).catch(() => {});
         } catch (e) {
           alert('No s\'ha pogut obrir "' + f.name + '": ' + e.message);
         } finally {
