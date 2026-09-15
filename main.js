@@ -5388,7 +5388,8 @@ function onMeasureHoverMove(event) {
   } else {
     dist = cam.position.distanceTo(p);
   }
-  const s = Math.max(0.001, dist * 0.03);
+  // El disc es fa una mica més gran perquè sigui inequívocament visible
+  const s = Math.max(0.02, dist * 0.06);
   measurePlaneMarker.scale.set(s, s, s);
   measurePlaneMarker.visible = true;
 }
