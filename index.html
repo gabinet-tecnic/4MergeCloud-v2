@@ -750,6 +750,19 @@
             </div>
             <button id="applyTransform" class="btn-orange">&#10003; APLICAR</button>
           </div>
+          <div style="margin-top:10px;border-top:1px solid #262b38;padding-top:10px">
+            <div style="font-size:10px;font-weight:700;color:#889;margin-bottom:6px;letter-spacing:0.4px">ESCALAT UNIFORME</div>
+            <div style="display:flex;gap:4px;align-items:center;margin-bottom:5px">
+              <input id="scaleFactor" class="num-input" type="number" step="0.001" value="1" style="flex:1">
+              <button id="applyScale" class="btn-orange" style="padding:5px 9px;font-size:10px">Aplicar</button>
+            </div>
+            <div style="display:flex;gap:4px;flex-wrap:wrap">
+              <button class="scale-preset" data-s="0.001" style="flex:1;min-width:0;font-size:10px;padding:4px 5px" title="Fitxer en mil·límetres → metres">mm→m</button>
+              <button class="scale-preset" data-s="0.01" style="flex:1;min-width:0;font-size:10px;padding:4px 5px" title="Fitxer en centímetres → metres">cm→m</button>
+              <button class="scale-preset" data-s="1000" style="flex:1;min-width:0;font-size:10px;padding:4px 5px" title="Metres → mil·límetres">m→mm</button>
+              <button class="scale-preset" data-s="100" style="flex:1;min-width:0;font-size:10px;padding:4px 5px" title="Metres → centímetres">m→cm</button>
+            </div>
+          </div>
         </div>
       </div>
 
