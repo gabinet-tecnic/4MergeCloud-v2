@@ -4656,6 +4656,33 @@ function setupUI() {
     transformControls.attach(target);
   };
 
+  // ── Escalat uniforme ──
+  function applyScaleToSelected(factor) {
+    const target = selectedCloud || clouds[clouds.length - 1];
+    if (!target) { alert('Cap núvol seleccionat.'); return; }
+    if (!factor || !isFinite(factor) || factor <= 0) { alert('Factor d\'escala no vàlid.'); return; }
+    pushUndo(target);
+    target.scale.multiplyScalar(factor);
+    // També cal escalar la posició perquè el núvol es quedi al lloc esperat
+    // (si tenia offset del pivot); això manté centre inalterat només si estava a 0.
+    target.updateMatrixWorld(true);
+    if (target.userData?.clipBox) syncClipBox(target);
+    updateRaycasterThreshold();
+    updateCloudList();
+    diag('escala ×' + factor + ' aplicada a ' + (target.name || 'núvol'));
+  }
+  document.getElementById('applyScale')?.addEventListener('click', () => {
+    const v = parseFloat(document.getElementById('scaleFactor').value);
+    applyScaleToSelected(v);
+  });
+  document.querySelectorAll('.scale-preset').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const s = parseFloat(btn.getAttribute('data-s'));
+      applyScaleToSelected(s);
+      document.getElementById('scaleFactor').value = '1';
+    });
+  });
+
   // ── Caixa de tall (live, per núvol) ──
   document.getElementById('createClipBox').onclick = createClippingBoxAroundSelected;
 
