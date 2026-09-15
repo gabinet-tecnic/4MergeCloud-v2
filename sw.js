@@ -1,6 +1,6 @@
 // Service Worker — Merge Cloud PWA
 // redeploy: re-trigger GitHub Pages (deploy encallat)
-const CACHE = 'mergecloud-v63';
+const CACHE = 'mergecloud-v64';
 
 const ASSETS = [
   './index.html',
@@ -11,6 +11,10 @@ const ASSETS = [
   './three/three.module.js',
   './jsm/controls/OrbitControls.js',
   './jsm/controls/TransformControls.js',
+  './jsm/loaders/FBXLoader.js',
+  './jsm/libs/fflate.module.js',
+  './jsm/curves/NURBSCurve.js',
+  './jsm/curves/NURBSUtils.js',
   './loaders/pointcloud_loaders.js',
   './loaders/PLYLoader.js',
   './icons/icon.svg',
