@@ -823,9 +823,8 @@ let orthoCamera = null;
 let orthoControls = null;
 let useOrtho = false;
 
-// Widget del punt d'òrbita (estil Polycam)
-let pivotMarker = null;
-let pivotSetMode = false;
+// Widget "pla" que segueix el cursor mentre s'està mesurant sobre malla
+let measurePlaneMarker = null;
 
 const clouds = [];
 let selectedCloud = null;
@@ -1012,12 +1011,12 @@ function init() {
   transformControls.setMode('translate');
   scene.add(transformControls);
 
-  // Marcador del punt d'òrbita: només visible mentre l'usuari està en mode
-  // "fixar òrbita" (després d'haver clicat el botó 🎯 Òrbita), per no
-  // distreure durant la navegació habitual.
-  pivotMarker = _createPivotMarker();
-  pivotMarker.visible = false;
-  scene.add(pivotMarker);
+  // Widget de "pla" per la mesura: petit disc + creu que se situa a la
+  // superfície on està el cursor mentre s'està mesurant sobre una malla.
+  // Sempre a sobre (depthTest=false), s'orienta a la normal del triangle.
+  measurePlaneMarker = _createMeasurePlaneMarker();
+  measurePlaneMarker.visible = false;
+  scene.add(measurePlaneMarker);
 
   transformControls.addEventListener('dragging-changed', (e) => {
     if (e.value) {
@@ -1068,6 +1067,8 @@ function init() {
 
   window.addEventListener('resize', onWindowResize);
   renderer.domElement.addEventListener('pointerdown', onPointerDown);
+  renderer.domElement.addEventListener('pointermove', onMeasureHoverMove);
+  renderer.domElement.addEventListener('pointerleave', () => { if (measurePlaneMarker) measurePlaneMarker.visible = false; });
   renderer.domElement.addEventListener('wheel', onMouseWheel, { passive: false });
 }
 
@@ -5173,52 +5174,92 @@ function _pickTargets() {
   return out;
 }
 
-// ── Punt d'òrbita (widget estil Polycam) ────────────────────────────────
-function _createPivotMarker() {
+// ── Widget de "pla" per la mesura ───────────────────────────────────────
+// Petit disc + creu que se situa sobre la superfície de la malla mentre
+// el cursor està a sobre. S'orienta perpendicular a la normal del triangle
+// per confirmar visualment quin pla toca l'usuari abans de clicar.
+function _createMeasurePlaneMarker() {
   const g = new THREE.Group();
-  g.name = '__pivot_marker__';
-  const axisMat = (c) => new THREE.LineBasicMaterial({ color: c, depthTest: false, transparent: true, opacity: 0.95 });
-  const line = (a, b, c) => {
-    const geo = new THREE.BufferGeometry().setFromPoints([a, b]);
-    const l = new THREE.Line(geo, axisMat(c));
-    l.renderOrder = 999;
-    return l;
-  };
-  g.add(line(new THREE.Vector3(-1,0,0), new THREE.Vector3(1,0,0), 0xff5566));
-  g.add(line(new THREE.Vector3(0,-1,0), new THREE.Vector3(0,1,0), 0x55dd55));
-  g.add(line(new THREE.Vector3(0,0,-1), new THREE.Vector3(0,0,1), 0x5588ff));
-  const ringGeo = new THREE.RingGeometry(1.1, 1.25, 40);
-  const ringMat = new THREE.MeshBasicMaterial({
+  g.name = '__measure_plane_marker__';
+  // Disc translúcid
+  const discGeo = new THREE.CircleGeometry(1, 40);
+  const discMat = new THREE.MeshBasicMaterial({
     color: 0x66ccff, side: THREE.DoubleSide,
-    transparent: true, opacity: 0.75, depthTest: false,
+    transparent: true, opacity: 0.28, depthTest: false,
+  });
+  const disc = new THREE.Mesh(discGeo, discMat);
+  disc.renderOrder = 999;
+  g.add(disc);
+  // Anell perimetral
+  const ringGeo = new THREE.RingGeometry(0.98, 1.08, 40);
+  const ringMat = new THREE.MeshBasicMaterial({
+    color: 0x33bbff, side: THREE.DoubleSide,
+    transparent: true, opacity: 0.95, depthTest: false,
   });
   const ring = new THREE.Mesh(ringGeo, ringMat);
   ring.renderOrder = 999;
-  ring.name = '__pivot_ring__';
   g.add(ring);
+  // Creu central
+  const axisMat = new THREE.LineBasicMaterial({ color: 0xffffff, depthTest: false, transparent: true, opacity: 0.9 });
+  const cross = (a, b) => {
+    const geo = new THREE.BufferGeometry().setFromPoints([a, b]);
+    const l = new THREE.Line(geo, axisMat);
+    l.renderOrder = 1000;
+    return l;
+  };
+  g.add(cross(new THREE.Vector3(-0.35, 0, 0), new THREE.Vector3(0.35, 0, 0)));
+  g.add(cross(new THREE.Vector3(0, -0.35, 0), new THREE.Vector3(0, 0.35, 0)));
   return g;
 }
 
-function updatePivotMarker() {
-  if (!pivotMarker) return;
-  pivotMarker.visible = pivotSetMode;
-  if (!pivotSetMode) return;
+// Mou el widget al punt sota el cursor mentre estem en Mesura o Alineació.
+function onMeasureHoverMove(event) {
+  if (!measurePlaneMarker) return;
+  const active = measuring || alignMode;
+  if (!active || _ed2dActive) {
+    measurePlaneMarker.visible = false;
+    return;
+  }
+  const rect = renderer.domElement.getBoundingClientRect();
+  const nx = ((event.clientX - rect.left) / rect.width)  * 2 - 1;
+  const ny = -((event.clientY - rect.top)  / rect.height) * 2 + 1;
+  mouse.set(nx, ny);
   const cam = useOrtho ? orthoCamera : camera;
-  const target = useOrtho ? (orthoControls && orthoControls.target) : (controls && controls.target);
-  if (!cam || !target) return;
-  pivotMarker.position.copy(target);
-  // Escala segons la distància perquè es vegi sempre igual a pantalla
+  raycaster.setFromCamera(mouse, cam);
+  const hits = raycaster.intersectObjects(_pickTargets(), true);
+  if (hits.length === 0) {
+    measurePlaneMarker.visible = false;
+    return;
+  }
+  const hit = _pickVisibleHit(hits, cam);
+  const p = (hit.object.isPoints && hit.index != null && hit.object.geometry?.attributes?.position)
+    ? new THREE.Vector3().fromBufferAttribute(hit.object.geometry.attributes.position, hit.index).applyMatrix4(hit.object.matrixWorld)
+    : hit.point.clone();
+  measurePlaneMarker.position.copy(p);
+  // Orientació: perpendicular a la normal del triangle, si n'hi ha
+  let normal = null;
+  if (hit.face && hit.face.normal) {
+    const n = hit.face.normal.clone();
+    const nm = new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld);
+    n.applyMatrix3(nm).normalize();
+    normal = n;
+  }
+  if (!normal) {
+    // Sense normal (núvol de punts): fem que el disc miri a càmera
+    normal = new THREE.Vector3().subVectors(cam.position, p).normalize();
+  }
+  const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
+  measurePlaneMarker.quaternion.copy(q);
+  // Escala segons la distància a càmera perquè es vegi sempre igual
   let dist;
   if (useOrtho) {
     dist = (orthoCamera.top - orthoCamera.bottom) * 0.5;
   } else {
-    dist = cam.position.distanceTo(target);
+    dist = cam.position.distanceTo(p);
   }
-  const s = Math.max(0.001, dist * 0.02);
-  pivotMarker.scale.set(s, s, s);
-  // L'anell mira sempre a càmera
-  const ring = pivotMarker.getObjectByName('__pivot_ring__');
-  if (ring) ring.lookAt(cam.position);
+  const s = Math.max(0.001, dist * 0.03);
+  measurePlaneMarker.scale.set(s, s, s);
+  measurePlaneMarker.visible = true;
 }
 
 // Quan estem en vista ortogonal mirant amunt (vista SO — sostre),
@@ -5256,26 +5297,6 @@ function onPointerDown(event) {
   mouse.set(nx, ny);
 
   const activeCam = useOrtho ? orthoCamera : camera;
-
-  // ── Fixar punt d'òrbita ──
-  if (pivotSetMode) {
-    raycaster.setFromCamera(mouse, activeCam);
-    const hits = raycaster.intersectObjects(_pickTargets(), true);
-    if (hits.length > 0) {
-      const hit = _pickVisibleHit(hits, activeCam);
-      const p = (hit.object.isPoints && hit.index != null && hit.object.geometry?.attributes?.position)
-        ? new THREE.Vector3().fromBufferAttribute(hit.object.geometry.attributes.position, hit.index).applyMatrix4(hit.object.matrixWorld)
-        : hit.point.clone();
-      const c = useOrtho ? orthoControls : controls;
-      c.target.copy(p);
-      c.update();
-    }
-    pivotSetMode = false;
-    const btn = document.getElementById('tbPivot');
-    if (btn) btn.classList.remove('active');
-    renderer.domElement.style.cursor = '';
-    return;
-  }
 
   // ── Mode alineació ──
   if (alignMode) {
@@ -6671,11 +6692,6 @@ function initTopUI() {
       if (b) { const t = b.textContent; b.textContent = '✓ Projecte desat'; setTimeout(() => { b.textContent = t; }, 1600); }
     } catch (e) { diag('⚠ desar projecte ha fallat: ' + e.message); alert('No s\'ha pogut desar el projecte: ' + e.message); }
   });
-  document.getElementById('tbPivot')?.addEventListener('click', (e) => {
-    pivotSetMode = !pivotSetMode;
-    e.currentTarget.classList.toggle('active', pivotSetMode);
-    renderer.domElement.style.cursor = pivotSetMode ? 'crosshair' : '';
-  });
 }
 
 // ── Panell de diagnòstic ──
@@ -7225,7 +7241,6 @@ function animate() {
     }
     updateClipPlanes();
     updateGizmo();
-    updatePivotMarker();
 
     const { w: W, h: H } = _viewerSize();
     const camA = useOrtho ? orthoCamera : camera;
