@@ -196,6 +196,87 @@ async function _resolveOBJTexture(mtlName, companions) {
   return { id, reason: id ? null : 'no s\'ha pogut descodificar la imatge' };
 }
 
+// Carrega un fitxer FBX i el converteix a un THREE.Points amb vista de malla
+// texturada annexa a userData.meshView (mateix patró que loadGLB) per poder
+// alternar entre "punts" i "malla" al llistat de núvols.
+let _FBXLoaderCache = null;
+async function _getFBXLoader() {
+  if (_FBXLoaderCache) return _FBXLoaderCache;
+  const mod = await import('./jsm/loaders/FBXLoader.js');
+  _FBXLoaderCache = mod.FBXLoader;
+  return _FBXLoaderCache;
+}
+
+async function loadFBX(file) {
+  const FBXLoader = await _getFBXLoader();
+  const buf = await file.arrayBuffer();
+  const loader = new FBXLoader();
+  let root;
+  try {
+    root = loader.parse(buf, '');
+  } catch (e) {
+    throw new Error('No s\'ha pogut llegir l\'FBX: ' + e.message);
+  }
+
+  // Recull totes les malles i les seves posicions per construir el núvol de punts.
+  const meshGroup = new THREE.Group();
+  meshGroup.name = '__mesh_view__';
+  meshGroup.visible = false;
+  const allPositions = [];
+  const allColors = [];
+  let hasColors = false;
+
+  root.updateMatrixWorld(true);
+  root.traverse((o) => {
+    if (!o.isMesh) return;
+    const g = o.geometry;
+    if (!g || !g.attributes?.position) return;
+    // Assegura material bàsic amb doble cara (per pdc raycast normal des de dins).
+    const clone = o.clone();
+    clone.matrix.copy(o.matrixWorld);
+    clone.matrix.decompose(clone.position, clone.quaternion, clone.scale);
+    // Alguns FBX porten materials complexos; convertim a MeshBasicMaterial
+    // per garantir visibilitat sense llums (com fem amb GLB).
+    const mats = Array.isArray(o.material) ? o.material : [o.material];
+    const basicMats = mats.map(m => {
+      const map = m?.map || null;
+      const color = m?.color ? m.color.clone() : new THREE.Color(0xcccccc);
+      return new THREE.MeshBasicMaterial({ map, color, side: THREE.DoubleSide, vertexColors: !!g.attributes.color });
+    });
+    clone.material = Array.isArray(o.material) ? basicMats : basicMats[0];
+    meshGroup.add(clone);
+
+    // Sample posicions per al núvol
+    const pos = g.attributes.position;
+    const col = g.attributes.color;
+    if (col) hasColors = true;
+    const mw = o.matrixWorld;
+    const v = new THREE.Vector3();
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i).applyMatrix4(mw);
+      allPositions.push(v.x, v.y, v.z);
+      if (col) allColors.push(col.getX(i), col.getY(i), col.getZ(i));
+      else     allColors.push(1, 1, 1);
+    }
+  });
+
+  if (allPositions.length === 0) throw new Error('L\'FBX no conté malles amb vèrtexs');
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(allPositions), 3));
+  if (hasColors) geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(allColors), 3));
+  const mat = new THREE.PointsMaterial({ size: 0.025, vertexColors: hasColors, color: hasColors ? 0xffffff : 0xcccccc });
+  const cloud = new THREE.Points(geo, mat);
+  cloud.name = file.name;
+  cloud.add(meshGroup);
+  cloud.userData.meshView = meshGroup;
+  // Per defecte mostrem la malla (com fa GLB)
+  meshGroup.visible = true;
+  cloud.material.visible = false;
+  diag('FBX ' + file.name + ': ' + (allPositions.length/3|0) + ' vèrtexs, ' + meshGroup.children.length + ' malles');
+  return cloud;
+}
+
 async function loadOBJ(file, companions) {
   const text = await file.text();
   const positions = [], colors = [], vt = [];
@@ -752,7 +833,7 @@ const I18N = {
   // Pestanyes / mòduls
   'NÚVOL':'CLOUD','DIBUIX':'DRAWING',
   // Càrrega
-  'Carregar Fitxer (XYZ/PLY/OBJ/GLB)':'Load File (XYZ/PLY/OBJ/GLB)',
+  'Carregar Fitxer (XYZ/PLY/OBJ/GLB/FBX)':'Load File (XYZ/PLY/OBJ/GLB/FBX)',
   'ARROSSEGA FITXERS O UNA CARPETA AQUÍ':'DRAG FILES OR A FOLDER HERE',
   'OBJ amb textura?':'Textured OBJ?','Carrega la carpeta sencera':'Load the whole folder',
   '(obj + mtl + textures) per veure\'n el color':'(obj + mtl + textures) to see its color',
@@ -788,7 +869,7 @@ const I18N_ATTR = {
   'gruix (m)':'thickness (m)',
   'Escriu una ordre o pregunta (ex: vista de planta, aplica filtre soroll)…':'Type a command or question (e.g. top view, apply noise filter)…',
   // tooltips barra superior
-  'Obrir fitxers o una carpeta (XYZ/PLY/OBJ/GLB o un projecte .4mc)':'Open files or a folder (XYZ/PLY/OBJ/GLB or a .4mc project)',
+  'Obrir fitxers o una carpeta (XYZ/PLY/OBJ/GLB/FBX o un projecte .4mc)':'Open files or a folder (XYZ/PLY/OBJ/GLB/FBX or a .4mc project)',
   'Uneix tots els núvols carregats en un de sol dins l\'escena (no descarrega)':'Merge all loaded clouds into one in the scene (does not download)',
   'Descarrega el núvol (o núvols) actuals com a fitxer XYZ':'Download the current cloud(s) as an XYZ file',
   'Desfà l\'última acció':'Undo the last action','Registre de diagnòstic':'Diagnostics log',
@@ -4453,6 +4534,7 @@ function setupUI() {
           else if (ext === 'xyz' || ext === 'txt') cloud = await loadXYZ(file);
           else if (ext === 'obj')                cloud = await loadOBJ(file, companions);
           else if (ext === 'glb' || ext === 'gltf') cloud = await loadGLB(file, companions);
+          else if (ext === 'fbx')                cloud = await loadFBX(file);
           else { alert(T.unsupported(ext)); continue; }
         } catch (err) {
           console.error('Error carregant núvol:', err);
