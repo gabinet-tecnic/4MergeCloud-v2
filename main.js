@@ -6000,11 +6000,12 @@ function _fileEmoji(name, mimeType) {
   if (ext === '4mc') return '💾';
   return '📁';
 }
-async function _renderLibraryGrid(folder) {
-  const grid = document.getElementById('wLibraryGrid');
-  const hint = document.getElementById('wLibraryHint');
-  const status = document.getElementById('wLibraryStatus');
-  const refresh = document.getElementById('wLibraryRefresh');
+async function _renderLibraryGrid(folder, prefix) {
+  prefix = prefix || 'w';   // 'w' per welcome; 'm' per modal
+  const grid = document.getElementById(prefix + 'LibraryGrid');
+  const hint = document.getElementById(prefix + 'LibraryHint');
+  const status = document.getElementById(prefix + 'LibraryStatus');
+  const refresh = document.getElementById(prefix + 'LibraryRefresh');
   if (!grid) return;
   hint.style.display = 'none';
   grid.style.display = 'none';
@@ -6053,6 +6054,8 @@ async function _renderLibraryGrid(folder) {
           await window.MCDrive.openLibraryFile(f);
           const welcome = document.getElementById('welcomeScreen');
           if (welcome) welcome.style.display = 'none';
+          const modal = document.getElementById('libraryModal');
+          if (modal) modal.style.display = 'none';
         } catch (e) {
           alert('No s\'ha pogut obrir "' + f.name + '": ' + e.message);
         } finally {
@@ -6067,31 +6070,56 @@ async function _renderLibraryGrid(folder) {
   }
 }
 function initLibraryUI() {
-  const chooseBtn = document.getElementById('wLibraryChoose');
-  const refresh = document.getElementById('wLibraryRefresh');
-  const titleEl = document.getElementById('wLibraryTitle');
-  if (!chooseBtn) return;
   const MC = window.MCDrive;
   if (!MC) return;   // drive.js encara no ha carregat
-  chooseBtn.addEventListener('click', async () => {
-    try {
-      const folder = await MC.chooseLibraryFolder();
-      if (!folder) return;
-      if (titleEl) titleEl.textContent = 'Biblioteca: ' + folder.name;
-      chooseBtn.textContent = 'Canviar carpeta';
-      await _renderLibraryGrid(folder);
-    } catch (e) { alert('Google Drive: ' + e.message); }
-  });
-  refresh?.addEventListener('click', () => {
+
+  // Cablat per un panell concret ('w' del welcome o 'm' del modal)
+  function wire(prefix) {
+    const chooseBtn = document.getElementById(prefix + 'LibraryChoose');
+    const refresh = document.getElementById(prefix + 'LibraryRefresh');
+    const titleEl = document.getElementById(prefix + 'LibraryTitle');
+    if (!chooseBtn) return;
+    chooseBtn.addEventListener('click', async () => {
+      try {
+        const folder = await MC.chooseLibraryFolder();
+        if (!folder) return;
+        if (titleEl) titleEl.textContent = 'Biblioteca: ' + folder.name;
+        chooseBtn.textContent = 'Canviar carpeta';
+        await _renderLibraryGrid(folder, prefix);
+      } catch (e) { alert('Google Drive: ' + e.message); }
+    });
+    refresh?.addEventListener('click', () => {
+      const f = MC.getLibraryFolder();
+      if (f) _renderLibraryGrid(f, prefix);
+    });
+    // Auto-càrrega si ja hi ha carpeta configurada
     const f = MC.getLibraryFolder();
-    if (f) _renderLibraryGrid(f);
-  });
-  // Auto-càrrega si ja hi ha carpeta configurada
-  const f = MC.getLibraryFolder();
-  if (f) {
-    if (titleEl) titleEl.textContent = 'Biblioteca: ' + f.name;
-    chooseBtn.textContent = 'Canviar carpeta';
-    _renderLibraryGrid(f).catch(() => {});
+    if (f) {
+      if (titleEl) titleEl.textContent = 'Biblioteca: ' + f.name;
+      chooseBtn.textContent = 'Canviar carpeta';
+    }
+  }
+  wire('w');
+  wire('m');
+  // Auto-càrrega inicial de la graella al welcome (només)
+  const initial = MC.getLibraryFolder();
+  if (initial) _renderLibraryGrid(initial, 'w').catch(() => {});
+
+  // Botó Biblioteca a la barra superior obre el modal (i carrega si cal)
+  const tbBtn = document.getElementById('tbLibrary');
+  const modal = document.getElementById('libraryModal');
+  if (tbBtn && modal) {
+    tbBtn.addEventListener('click', async () => {
+      modal.style.display = 'flex';
+      const f = MC.getLibraryFolder();
+      if (f) {
+        try { await _renderLibraryGrid(f, 'm'); } catch (_) {}
+      }
+    });
+    // Clicar fora del contingut tanca el modal
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) modal.style.display = 'none';
+    });
   }
 }
 
