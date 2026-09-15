@@ -4475,7 +4475,7 @@ function setupUI() {
   fileInput.value = '';
   let _loading = false;
 
-  const CLOUD_EXTS = ['ply', 'xyz', 'txt', 'obj', 'glb', 'gltf'];
+  const CLOUD_EXTS = ['ply', 'xyz', 'txt', 'obj', 'glb', 'gltf', 'fbx'];
 
   // Signatura del darrer conjunt de fitxers processat, per rebutjar duplicats
   // consecutius (l'iPad Safari a vegades dispara 'change' més d'una vegada).
@@ -4521,7 +4521,7 @@ function setupUI() {
       return;
     }
     const cloudFiles = files.filter(f => CLOUD_EXTS.includes(f.name.split('.').pop().toLowerCase()));
-    if (cloudFiles.length === 0) { _loading = false; alert('No he trobat cap núvol (.ply .xyz .obj .glb) entre els fitxers.'); return; }
+    if (cloudFiles.length === 0) { _loading = false; alert('No he trobat cap núvol (.ply .xyz .obj .glb .fbx) entre els fitxers.'); return; }
     const badge = document.getElementById('loadingBadge');
     try {
       for (const file of cloudFiles) {
@@ -5931,6 +5931,120 @@ function persistSession(immediate) {
 }
 
 // Restauració de la sessió a l'arrencada
+// ── Biblioteca (pantalla de benvinguda) ────────────────────────────────
+function _formatFileSize(bytes) {
+  if (!bytes || isNaN(bytes)) return '';
+  const kb = bytes / 1024;
+  if (kb < 1024) return kb.toFixed(0) + ' KB';
+  const mb = kb / 1024;
+  if (mb < 1024) return mb.toFixed(1) + ' MB';
+  return (mb / 1024).toFixed(2) + ' GB';
+}
+function _fileEmoji(name, mimeType) {
+  const ext = (name || '').toLowerCase().split('.').pop();
+  if (ext === 'glb' || ext === 'gltf') return '🧊';
+  if (ext === 'fbx') return '🎬';
+  if (ext === 'ply') return '⚪';
+  if (ext === 'xyz' || ext === 'txt') return '📄';
+  if (ext === 'obj') return '📦';
+  if (ext === '4mc') return '💾';
+  return '📁';
+}
+async function _renderLibraryGrid(folder) {
+  const grid = document.getElementById('wLibraryGrid');
+  const hint = document.getElementById('wLibraryHint');
+  const status = document.getElementById('wLibraryStatus');
+  const refresh = document.getElementById('wLibraryRefresh');
+  if (!grid) return;
+  hint.style.display = 'none';
+  grid.style.display = 'none';
+  status.style.display = 'block';
+  status.textContent = 'Carregant biblioteca…';
+  refresh.style.display = 'inline-block';
+  try {
+    const files = await window.MCDrive.listLibraryFiles(folder);
+    // Filtra només els formats que sabem obrir
+    const OK = new Set(['ply','xyz','txt','obj','glb','gltf','fbx','4mc']);
+    const usable = files.filter(f => OK.has((f.name || '').toLowerCase().split('.').pop()));
+    if (usable.length === 0) {
+      status.textContent = 'La carpeta no conté escàners compatibles. Puja fitxers PLY/XYZ/OBJ/GLB/FBX/.4mc.';
+      return;
+    }
+    status.style.display = 'none';
+    grid.style.display = 'grid';
+    grid.innerHTML = '';
+    for (const f of usable) {
+      const card = document.createElement('div');
+      card.className = 'lib-card';
+      const thumb = document.createElement('div');
+      thumb.className = 'lib-thumb';
+      if (f.thumbnailLink) {
+        const img = document.createElement('img');
+        img.src = f.thumbnailLink;
+        img.referrerPolicy = 'no-referrer';
+        thumb.appendChild(img);
+      } else {
+        thumb.textContent = _fileEmoji(f.name, f.mimeType);
+      }
+      const name = document.createElement('div');
+      name.className = 'lib-name';
+      name.textContent = f.name;
+      const meta = document.createElement('div');
+      meta.className = 'lib-meta';
+      const d = f.modifiedTime ? new Date(f.modifiedTime).toLocaleDateString() : '';
+      meta.textContent = [_formatFileSize(f.size), d].filter(Boolean).join(' · ');
+      card.appendChild(thumb);
+      card.appendChild(name);
+      card.appendChild(meta);
+      card.onclick = async () => {
+        card.style.opacity = '0.5';
+        card.style.pointerEvents = 'none';
+        try {
+          await window.MCDrive.openLibraryFile(f);
+          const welcome = document.getElementById('welcomeScreen');
+          if (welcome) welcome.style.display = 'none';
+        } catch (e) {
+          alert('No s\'ha pogut obrir "' + f.name + '": ' + e.message);
+        } finally {
+          card.style.opacity = '';
+          card.style.pointerEvents = '';
+        }
+      };
+      grid.appendChild(card);
+    }
+  } catch (e) {
+    status.textContent = 'Error carregant la biblioteca: ' + e.message;
+  }
+}
+function initLibraryUI() {
+  const chooseBtn = document.getElementById('wLibraryChoose');
+  const refresh = document.getElementById('wLibraryRefresh');
+  const titleEl = document.getElementById('wLibraryTitle');
+  if (!chooseBtn) return;
+  const MC = window.MCDrive;
+  if (!MC) return;   // drive.js encara no ha carregat
+  chooseBtn.addEventListener('click', async () => {
+    try {
+      const folder = await MC.chooseLibraryFolder();
+      if (!folder) return;
+      if (titleEl) titleEl.textContent = 'Biblioteca: ' + folder.name;
+      chooseBtn.textContent = 'Canviar carpeta';
+      await _renderLibraryGrid(folder);
+    } catch (e) { alert('Google Drive: ' + e.message); }
+  });
+  refresh?.addEventListener('click', () => {
+    const f = MC.getLibraryFolder();
+    if (f) _renderLibraryGrid(f);
+  });
+  // Auto-càrrega si ja hi ha carpeta configurada
+  const f = MC.getLibraryFolder();
+  if (f) {
+    if (titleEl) titleEl.textContent = 'Biblioteca: ' + f.name;
+    chooseBtn.textContent = 'Canviar carpeta';
+    _renderLibraryGrid(f).catch(() => {});
+  }
+}
+
 async function restoreSession() {
   let data;
   try { data = await idbGet(MC_KEY); } catch (_) { _sessionReady = true; return; }
@@ -7441,6 +7555,7 @@ try { initDiagUI(); } catch(e) { console.error('initDiagUI() crashed:', e); }
 try { initGizmo(); } catch(e) { console.error('initGizmo() crashed:', e); }
 try { initActionLogger(); } catch(e) { console.error('initActionLogger() crashed:', e); }
 try { _translateUI(); } catch(e) { console.error('_translateUI() crashed:', e); }
+try { initLibraryUI(); } catch(e) { console.error('initLibraryUI() crashed:', e); }
 // Restaura la sessió anterior (núvols + dibuix) — F5 no perd el treball
 try { restoreSession(); } catch(e) { console.error('restoreSession() crashed:', e); _sessionReady = true; }
 try { _restoreActionLog(); } catch(e) { console.error('_restoreActionLog() crashed:', e); }

@@ -201,6 +201,58 @@
     }
   }
 
+  // ── Biblioteca: carpeta del Drive on l'usuari té els seus escàners ─────
+  const LIB_KEY = '4mc_library_folder';
+
+  function getLibraryFolder() {
+    try { return JSON.parse(localStorage.getItem(LIB_KEY) || 'null'); }
+    catch (_) { return null; }
+  }
+  function setLibraryFolder(f) {
+    try { localStorage.setItem(LIB_KEY, JSON.stringify(f)); } catch (_) {}
+  }
+
+  async function chooseLibraryFolder() {
+    const token = await requestToken();
+    const folder = await pickFolder(token);
+    if (!folder) return null;
+    setLibraryFolder({ id: folder.id, name: folder.name });
+    return { id: folder.id, name: folder.name };
+  }
+
+  async function listLibraryFiles(folder) {
+    if (!folder) folder = getLibraryFolder();
+    if (!folder) return [];
+    const token = await requestToken();
+    const url = 'https://www.googleapis.com/drive/v3/files'
+      + '?q=' + encodeURIComponent(`'${folder.id}' in parents and trashed=false`)
+      + '&fields=' + encodeURIComponent('files(id,name,mimeType,size,modifiedTime,thumbnailLink,iconLink)')
+      + '&orderBy=modifiedTime desc'
+      + '&pageSize=100';
+    const res = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
+    if (!res.ok) throw new Error('No s\'ha pogut llistar la biblioteca: ' + res.status);
+    const json = await res.json();
+    return json.files || [];
+  }
+
+  async function openLibraryFile(fileEntry) {
+    const token = await requestToken();
+    accessToken = token;
+    const f = await downloadFile(fileEntry.id, fileEntry.name);
+    if (typeof window.handleFiles === 'function') {
+      await window.handleFiles([f]);
+    }
+  }
+
+  // API pública per al codi de l'app
+  window.MCDrive = {
+    getLibraryFolder,
+    chooseLibraryFolder,
+    listLibraryFiles,
+    openLibraryFile,
+    clearLibraryFolder: () => setLibraryFolder(null),
+  };
+
   function bindButton() {
     const btnOpen = document.getElementById('tbDrive');
     if (btnOpen) btnOpen.addEventListener('click', openFromDrive);

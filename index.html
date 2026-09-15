@@ -1090,9 +1090,44 @@
           </div>
         </div>
         <div id="waDemoCloud" style="display:none"></div>
+
+        <!-- Biblioteca: escàners guardats a Google Drive -->
+        <div id="wLibrary" style="margin-top:22px;border-top:1px solid #262b38;padding-top:14px">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+            <div style="font-size:12px;font-weight:700;color:#ccd;letter-spacing:0.4px">📁 <span id="wLibraryTitle">La meva biblioteca</span></div>
+            <div style="display:flex;gap:6px">
+              <button id="wLibraryChoose" class="wa-link" style="font-size:10px;background:none;border:1px solid #2a2d40;color:#889;padding:4px 8px;border-radius:4px;cursor:pointer">Triar carpeta del Drive</button>
+              <button id="wLibraryRefresh" title="Refrescar" style="display:none;font-size:11px;background:none;border:1px solid #2a2d40;color:#889;padding:4px 8px;border-radius:4px;cursor:pointer">↻</button>
+            </div>
+          </div>
+          <div id="wLibraryHint" style="font-size:11px;color:#556;line-height:1.6">Tria una carpeta del Google Drive per veure aquí els teus escàners i obrir-los amb un clic.</div>
+          <div id="wLibraryGrid" style="display:none;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px"></div>
+          <div id="wLibraryStatus" style="display:none;font-size:11px;color:#556;line-height:1.6;text-align:center;padding:14px 0"></div>
+        </div>
+
         <p style="font-size:9px;color:#334;margin-top:18px;text-align:right">v1.3.0 (Three.js WebGL)</p>
       </div>
     </div>
+
+    <style>
+      #wLibraryGrid .lib-card {
+        background: #12141d; border: 1px solid #262b38; border-radius: 6px;
+        padding: 10px; cursor: pointer; transition: all .15s;
+        display: flex; flex-direction: column; gap: 6px;
+      }
+      #wLibraryGrid .lib-card:hover { border-color: #e07820; background: #1a1d28; }
+      #wLibraryGrid .lib-thumb {
+        width: 100%; aspect-ratio: 4/3; background: #0d0f16; border-radius: 4px;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 32px; color: #445;
+      }
+      #wLibraryGrid .lib-thumb img { width:100%; height:100%; object-fit:cover; border-radius:4px }
+      #wLibraryGrid .lib-name {
+        font-size: 11px; color: #ccd; font-weight: 600;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      }
+      #wLibraryGrid .lib-meta { font-size: 10px; color: #556; }
+    </style>
 
     <canvas id="lassoCanvas"></canvas>
     <canvas id="annotateCanvas"></canvas>
