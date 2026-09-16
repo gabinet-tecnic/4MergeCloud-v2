@@ -357,7 +357,12 @@
       background: #16181f; border: 1px solid #2a2d40;
       border-radius: 12px; padding: 32px 36px;
       max-width: 560px; width: 90%; pointer-events: auto;
+      max-height: 90vh; overflow-y: auto; overflow-x: hidden;
+      scrollbar-width: thin; scrollbar-color: #3a3f55 transparent;
     }
+    #welcomeCard::-webkit-scrollbar { width: 10px; }
+    #welcomeCard::-webkit-scrollbar-thumb { background: #3a3f55; border-radius: 5px; }
+    #welcomeCard::-webkit-scrollbar-thumb:hover { background: #4a5070; }
     #welcomeBadge {
       display: inline-flex; align-items: center; gap: 6px;
       background: #1a1d28; border: 1px solid #2a2d40; border-radius: 20px;
