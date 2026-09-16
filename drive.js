@@ -246,12 +246,31 @@
     }
   }
 
+  // Descarrega la miniatura que genera Google Drive per a un fitxer i la torna
+  // com a data URL (blob:) que es pot posar directament a un <img src>.
+  // Cal fer-ho amb Authorization perquè la thumbnailLink de Drive no és pública.
+  async function fetchThumbnail(thumbnailLink, sizePx) {
+    if (!thumbnailLink) return null;
+    try {
+      const token = await requestToken();
+      // Ajusta la mida: Drive posa una `=sN` al final; si en volem més, la substituïm.
+      const url = sizePx
+        ? thumbnailLink.replace(/=s\d+(?:-.+)?$/, '=s' + sizePx)
+        : thumbnailLink;
+      const res = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
+      if (!res.ok) return null;
+      const blob = await res.blob();
+      return URL.createObjectURL(blob);
+    } catch (_) { return null; }
+  }
+
   // API pública per al codi de l'app
   window.MCDrive = {
     getLibraryFolder,
     chooseLibraryFolder,
     listLibraryFiles,
     openLibraryFile,
+    fetchThumbnail,
     clearLibraryFolder: () => setLibraryFolder(null),
   };
 

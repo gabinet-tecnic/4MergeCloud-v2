@@ -6106,6 +6106,16 @@ async function _renderLibraryGrid(folder, prefix) {
         const img = document.createElement('img');
         img.src = cachedThumb;
         thumb.appendChild(img);
+      } else if (f.thumbnailLink && window.MCDrive?.fetchThumbnail) {
+        // Miniatura generada per Google Drive (per exemple, GLBs): la baixem
+        // en background i la col·loquem quan estigui llesta.
+        thumb.textContent = _fileEmoji(f.name, f.mimeType);
+        window.MCDrive.fetchThumbnail(f.thumbnailLink, 400).then((url) => {
+          if (!url) return;
+          const img = document.createElement('img');
+          img.src = url;
+          img.onload = () => { thumb.textContent = ''; thumb.appendChild(img); };
+        }).catch(() => {});
       } else {
         thumb.textContent = _fileEmoji(f.name, f.mimeType);
       }
