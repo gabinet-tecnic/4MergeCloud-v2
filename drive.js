@@ -6,9 +6,11 @@
 (function () {
   const CLIENT_ID = '66166800696-qbbqsktu87paiq0bg2a35n16fm3itj20.apps.googleusercontent.com';
   const API_KEY   = 'AIzaSyASZGSd9gaen43vS6mWMAyNXevQOmSMxdA';
-  // drive.file: pot llegir/escriure NOMÉS els fitxers que l'usuari tria al Picker
-  // o els que l'app crea. Mai no veu la resta del Drive — molt més segur que drive.readonly.
-  const SCOPES    = 'https://www.googleapis.com/auth/drive.file';
+  // drive.file: crear/modificar els fitxers de l'app (p.ex. desar .4mc).
+  // drive.readonly: llegir/llistar la resta del Drive (per veure tots els XYZ/GLB
+  // que l'usuari ja té a la seva carpeta de biblioteca, encara que no els hagi
+  // pujat des de l'app).
+  const SCOPES    = 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.readonly';
 
   let tokenClient = null;
   let accessToken = null;
