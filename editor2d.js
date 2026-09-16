@@ -54,6 +54,14 @@ export function createEditor2D(ctx) {
   const FREE_MIN  = 0.02;     // distància mínima entre punts mostrejats (m)
   const SIMPLIFY  = 0.10;     // epsilon Douglas-Peucker (m) → recte (més alt = menys punts)
 
+  // ── Formes clic-clic (línia, rectangle, cercle) ──
+  let shapes      = [];       // {id, type: 'line'|'rect'|'circle', a: {x,y,z}, b: {x,y,z}}
+  let shapeAnchor = null;     // punt món del 1r clic mentre s'està col·locant una forma
+  let sid         = 1;
+  const SHAPE_COL = 0xffb84d;
+  const SHAPE_PX  = 14;
+  const CIRCLE_SEG= 64;
+
   const COL_NODE    = 0xff6b4a;
   const COL_NODE_HL = 0xffffff;
   const COL_WALL    = 0xdddddd;
@@ -81,6 +89,31 @@ export function createEditor2D(ctx) {
       const s = worldToScreen(n);
       const d = Math.hypot(s.x - cx, s.y - cy);
       if (d < bd) { bd = d; best = n; }
+    }
+    return best;
+  }
+
+  // Distància en píxels d'un punt de pantalla a un segment del pla (per detectar
+  // clics a línies/rectangles/cercles al mode Esborrar).
+  function _distToSeg(px, py, a, b) {
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const L2 = dx*dx + dy*dy;
+    if (L2 === 0) return Math.hypot(px - a.x, py - a.y);
+    let t = ((px - a.x) * dx + (py - a.y) * dy) / L2;
+    t = Math.max(0, Math.min(1, t));
+    const qx = a.x + t*dx, qy = a.y + t*dy;
+    return Math.hypot(px - qx, py - qy);
+  }
+  function shapeAtScreen(cx, cy, maxPx) {
+    let best = null, bd = maxPx;
+    for (const sh of shapes) {
+      const pts = shapePointsFor(sh.type, sh.a, sh.b);
+      for (let i = 0; i < pts.length - 1; i++) {
+        const s1 = worldToScreen(pts[i]);
+        const s2 = worldToScreen(pts[i + 1]);
+        const d = _distToSeg(cx, cy, s1, s2);
+        if (d < bd) { bd = d; best = sh; }
+      }
     }
     return best;
   }
@@ -316,6 +349,12 @@ export function createEditor2D(ctx) {
       m.renderOrder = 999;
       group.add(m);
     }
+    // ── Formes (línia clic-clic / rectangle / cercle) ──
+    for (const sh of shapes) {
+      const pts = shapePointsFor(sh.type, sh.a, sh.b);
+      if (pts.length < 2) continue;
+      addLine(pts, SHAPE_COL);
+    }
     // mànecs d'obertura (centre = lliscar, extrems = amplada) — només en mode obertura
     if (mode === 'opening') {
       for (const op of openings) {
@@ -430,6 +469,49 @@ export function createEditor2D(ctx) {
     scene.add(preview);
   }
 
+  // Genera els punts d'una forma per dibuixar-la com a THREE.Line
+  function shapePointsFor(type, a, b) {
+    const pa = _planeAxes();
+    const y = a.y;   // treballem en el pla actiu; y = alçada bloquejada
+    if (type === 'line') {
+      return [new THREE.Vector3(a.x, a.y, a.z), new THREE.Vector3(b.x, b.y, b.z)];
+    }
+    if (type === 'rect') {
+      // Rectangle amb els cantons oposats a i b, alineat als eixos del pla actiu.
+      const u = pa.u, v = pa.v;
+      const c1 = { x: 0, y: y, z: 0 }; c1[u] = a[u]; c1[v] = a[v]; c1[pa.w] = a[pa.w];
+      const c2 = { x: 0, y: y, z: 0 }; c2[u] = b[u]; c2[v] = a[v]; c2[pa.w] = a[pa.w];
+      const c3 = { x: 0, y: y, z: 0 }; c3[u] = b[u]; c3[v] = b[v]; c3[pa.w] = a[pa.w];
+      const c4 = { x: 0, y: y, z: 0 }; c4[u] = a[u]; c4[v] = b[v]; c4[pa.w] = a[pa.w];
+      const V = (p) => new THREE.Vector3(p.x, p.y, p.z);
+      return [V(c1), V(c2), V(c3), V(c4), V(c1)];
+    }
+    // circle: a = centre, b = punt a la circumferència
+    const u = pa.u, v = pa.v;
+    const r = Math.hypot(b[u] - a[u], b[v] - a[v]);
+    const pts = [];
+    for (let i = 0; i <= CIRCLE_SEG; i++) {
+      const t = (i / CIRCLE_SEG) * Math.PI * 2;
+      const p = { x: 0, y: y, z: 0 };
+      p[u] = a[u] + Math.cos(t) * r;
+      p[v] = a[v] + Math.sin(t) * r;
+      p[pa.w] = a[pa.w];
+      pts.push(new THREE.Vector3(p.x, p.y, p.z));
+    }
+    return pts;
+  }
+
+  function updateShapePreview(type, a, b) {
+    removePreview();
+    const pts = shapePointsFor(type, a, b);
+    if (pts.length < 2) return;
+    const geo = new THREE.BufferGeometry().setFromPoints(pts);
+    preview = new THREE.Line(geo, new THREE.LineDashedMaterial({ color: SHAPE_COL, depthTest: false, dashSize: 0.08, gapSize: 0.05 }));
+    preview.computeLineDistances();
+    preview.renderOrder = 997;
+    scene.add(preview);
+  }
+
   // distància perpendicular al pla actiu d'un punt a la recta a-b
   function perpDist(p, a, b) {
     const { u, v } = _planeAxes();
@@ -530,9 +612,39 @@ export function createEditor2D(ctx) {
     // Els DITS (touch) no dibuixen: es deixen passar als controls (pan + pinch-zoom).
     // Dibuixen/editen només l'Apple Pencil ('pen') i el ratolí ('mouse').
     if (e.pointerType === 'touch') return;
+    // Botó dret (button === 2): a les eines de clic-clic surt/reinicia i no fa res més.
+    if (e.button === 2) {
+      if (mode === 'line-click' || mode === 'rect' || mode === 'circle') {
+        e.preventDefault(); e.stopImmediatePropagation();
+        shapeAnchor = null;
+        removePreview();
+        return;
+      }
+      return;   // altres modes: deixa passar (o no fem res)
+    }
     e.preventDefault();
     e.stopImmediatePropagation();
     const cx = e.clientX, cy = e.clientY;
+
+    // Eines clic-clic: línia / rectangle / cercle
+    if (mode === 'line-click' || mode === 'rect' || mode === 'circle') {
+      const w = ctx.screenToWorld(cx, cy);
+      if (!w) return;
+      const pa = _planeAxes();
+      const p = { x: w.x, y: w.y, z: w.z };
+      if (pa.w === 'y') { if (planeY == null) planeY = w.y; p.y = planeY; }
+      else { p[pa.w] = 0; }
+      if (!shapeAnchor) {
+        shapeAnchor = p;
+        removePreview();
+      } else {
+        shapes.push({ id: sid++, type: mode === 'line-click' ? 'line' : mode, a: shapeAnchor, b: p });
+        shapeAnchor = null;
+        removePreview();
+        rebuild(); changed();
+      }
+      return;
+    }
 
     if (mode === 'edit') {
       const n = nodeAtScreen(cx, cy, SNAP_PX);
@@ -542,6 +654,9 @@ export function createEditor2D(ctx) {
     }
 
     if (mode === 'erase') {
+      // esborra una forma (línia clic-clic / rect / cercle) si el clic hi cau a prop
+      const sh = shapeAtScreen(cx, cy, SHAPE_PX);
+      if (sh) { shapes = shapes.filter(x => x !== sh); rebuild(); changed(); return; }
       // esborra una obertura si n'hi ha a prop
       const oh = openingHandleAt(cx, cy, WALL_PX);
       if (oh) { openings = openings.filter(o => o !== oh.op); rebuild(); changed(); return; }
@@ -698,6 +813,17 @@ export function createEditor2D(ctx) {
       }
     }
 
+    // Preview per a les eines de clic-clic
+    if ((mode === 'line-click' || mode === 'rect' || mode === 'circle') && shapeAnchor) {
+      const w = ctx.screenToWorld(cx, cy);
+      if (!w) return;
+      const pa = _planeAxes();
+      const p = { x: w.x, y: w.y, z: w.z };
+      if (pa.w === 'y' && planeY != null) p.y = planeY; else p[pa.w] = 0;
+      updateShapePreview(mode === 'line-click' ? 'line' : mode, shapeAnchor, p);
+      return;
+    }
+
     if (mode === 'opening' && opDrag) {
       e.preventDefault();
       const w = ctx.screenToWorld(cx, cy);
@@ -831,12 +957,19 @@ export function createEditor2D(ctx) {
 
   function onKey(e) {
     if (!active) return;
-    if (e.key === 'Escape') { drawing = false; freePts = []; removePreview(); }
+    if (e.key === 'Escape') { drawing = false; freePts = []; shapeAnchor = null; removePreview(); }
   }
 
   el().addEventListener('pointerdown', onDown, { capture: true });
   el().addEventListener('pointermove', onMove, { capture: true });
   el().addEventListener('pointerup',   onUp,   { capture: true });
+  // El botó dret ha de sortir de l'eina de clic-clic sense obrir el menú del navegador.
+  el().addEventListener('contextmenu', (e) => {
+    if (!active) return;
+    if (mode === 'line-click' || mode === 'rect' || mode === 'circle') {
+      e.preventDefault();
+    }
+  });
   window.addEventListener('keydown', onKey);
 
   // ── Núvol com a referència (opacitat) ─────────────────────────────────────
@@ -936,6 +1069,8 @@ export function createEditor2D(ctx) {
     },
     setMode(m) {
       mode = m; drawing = false; freePts = []; hoverId = null;
+      shapeAnchor = null;
+      removePreview();
       if (m !== 'thickness') { selWall = null; measuring = false; measurePts = []; }
       if (m !== 'select') { selSet.clear(); }
       boxStart = null; boxNow = null; hideSelBox();
@@ -1032,7 +1167,8 @@ export function createEditor2D(ctx) {
         nodes: nodes.map(n => ({ id: n.id, x: n.x, y: n.y, z: n.z })),
         walls: walls.map(w => ({ a: w.a, b: w.b, thickness: w.thickness || 0, side: w.side || 0, type: w.type || 'wall' })),
         openings: openings.map(o => ({ wi: walls.indexOf(o.wall), t: o.t, width: o.width, type: o.type, rot: o.rot || 0 })).filter(o => o.wi >= 0),
-        planeY, nid,
+        shapes: shapes.map(sh => ({ id: sh.id, type: sh.type, a: { ...sh.a }, b: { ...sh.b } })),
+        planeY, nid, sid,
       };
     },
     setState(s) {
@@ -1041,9 +1177,12 @@ export function createEditor2D(ctx) {
       walls = (s.walls || []).map(w => ({ ...w }));
       openings = (s.openings || []).filter(o => o.wi >= 0 && o.wi < walls.length)
         .map(o => ({ id: oid++, wall: walls[o.wi], t: o.t, width: o.width, type: o.type, rot: o.rot || 0 }));
+      shapes = (s.shapes || []).map(sh => ({ id: sh.id || sid++, type: sh.type, a: { ...sh.a }, b: { ...sh.b } }));
       if (s.planeY != null) planeY = s.planeY;
       nid = Math.max(nid, s.nid || 1);
+      sid = Math.max(sid, s.sid || 1);
       selWall = null; opPick = null; opDrag = null; selSet.clear();
+      shapeAnchor = null;
       rebuild(); changed();
     },
   };

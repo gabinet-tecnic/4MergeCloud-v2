@@ -7157,6 +7157,9 @@ function _buildDiagText() {
 function _edSetModeBtn(m) {
   document.getElementById('edModeDraw')?.classList.toggle('active', m === 'draw');
   document.getElementById('edModePerim')?.classList.toggle('active', m === 'perimeter');
+  document.getElementById('edModeLineClick')?.classList.toggle('active', m === 'line-click');
+  document.getElementById('edModeRect')?.classList.toggle('active', m === 'rect');
+  document.getElementById('edModeCircle')?.classList.toggle('active', m === 'circle');
   document.getElementById('edModeEdit')?.classList.toggle('active', m === 'edit');
   document.getElementById('edModeErase')?.classList.toggle('active', m === 'erase');
   document.getElementById('edModeThick')?.classList.toggle('active', m === 'thickness');
@@ -7197,6 +7200,9 @@ function _wireEditorButtons(ed) {
   };
   document.getElementById('edModeDraw').onclick  = () => { ed.setMode('draw'); _edSetModeBtn('draw'); };
   document.getElementById('edModePerim').onclick = () => { ed.setMode('perimeter'); _edSetModeBtn('perimeter'); };
+  document.getElementById('edModeLineClick')?.addEventListener('click', () => { ed.setMode('line-click'); _edSetModeBtn('line-click'); });
+  document.getElementById('edModeRect')?.addEventListener('click', () => { ed.setMode('rect'); _edSetModeBtn('rect'); });
+  document.getElementById('edModeCircle')?.addEventListener('click', () => { ed.setMode('circle'); _edSetModeBtn('circle'); });
   document.getElementById('edModeEdit').onclick  = () => { ed.setMode('edit'); _edSetModeBtn('edit'); };
   document.getElementById('edModeErase').onclick = () => { ed.setMode('erase'); _edSetModeBtn('erase'); };
   document.getElementById('edModeThick').onclick = () => { ed.setMode('thickness'); _edSetModeBtn('thickness'); };
