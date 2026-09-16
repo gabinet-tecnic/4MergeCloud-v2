@@ -47,9 +47,10 @@
     }
     .lang-btn.active { background: #e07820; color: #fff; }
 
-    #panelScroll { flex: 1; overflow-y: auto; overflow-x: hidden; }
-    #panelScroll::-webkit-scrollbar { width: 4px; }
-    #panelScroll::-webkit-scrollbar-thumb { background: #2a2d40; border-radius: 2px; }
+    #panelScroll { flex: 1; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; scrollbar-color: #3a3f55 transparent; }
+    #panelScroll::-webkit-scrollbar { width: 10px; }
+    #panelScroll::-webkit-scrollbar-thumb { background: #3a3f55; border-radius: 5px; }
+    #panelScroll::-webkit-scrollbar-thumb:hover { background: #4a5070; }
 
     /* Load area */
     #loadArea {
@@ -69,7 +70,7 @@
       padding: 6px 14px 4px;
     }
     #cloudSection { padding-bottom: 6px; }
-    #cloudListPanel { max-height: 100px; overflow-y: auto; padding: 0 12px; font-size: 11px; }
+    #cloudListPanel { max-height: 220px; overflow-y: auto; padding: 0 12px; font-size: 12px; }
     #cloudListPanel:empty::before {
       content: 'Cap núvol actiu'; color: #445;
       display: block; padding: 3px 2px; font-style: italic;
@@ -80,11 +81,11 @@
     }
     .cloud-item:hover { background: #1e2130; }
     .cloud-item.selected { background: #2a1e0f; border-color: #e07820; }
-    .cloud-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: #ccc; }
-    .cloud-pts { font-size: 9px; color: #556; margin-right: 4px; white-space: nowrap; }
-    .cloud-eye { cursor: pointer; padding: 0 3px; font-size: 12px; color: #445; }
-    .cloud-eye:hover { color: #aaa; }
-    .cloud-del { color: #b33; cursor: pointer; padding: 0 3px; font-size: 12px; }
+    .cloud-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: #ccc; }
+    .cloud-pts { font-size: 10px; color: #556; margin-right: 4px; white-space: nowrap; }
+    .cloud-eye { cursor: pointer; padding: 2px 5px; font-size: 15px; color: #667; }
+    .cloud-eye:hover { color: #bbb; }
+    .cloud-del { color: #b33; cursor: pointer; padding: 2px 5px; font-size: 15px; }
     .cloud-del:hover { color: #f55; }
 
     /* ── ACCORDION ─────────────────────────────── */
@@ -239,7 +240,7 @@
     #tbTitle { font-size: 17px; font-weight: 700; color: #e07820; letter-spacing: .3px; white-space: nowrap; }
     #tbLogo #appVersion { font-size: 9px; color: #556; font-weight: 400; letter-spacing: 0; }
     #topBar .tb-btn {
-      padding: 7px 15px; font-size: 13px; font-weight: 600; border-radius: 7px; cursor: pointer;
+      padding: 9px 18px; font-size: 15px; font-weight: 600; border-radius: 8px; cursor: pointer;
       border: 1px solid #2a3145; background: #1a1f2c; color: #d6deea; letter-spacing: .2px;
       transition: background .13s, color .13s, border-color .13s;
     }
