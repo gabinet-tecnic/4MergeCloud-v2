@@ -638,8 +638,11 @@ export function createEditor2D(ctx) {
         shapeAnchor = p;
         removePreview();
       } else {
-        shapes.push({ id: sid++, type: mode === 'line-click' ? 'line' : mode, a: shapeAnchor, b: p });
-        shapeAnchor = null;
+        const shapeType = mode === 'line-click' ? 'line' : mode;
+        shapes.push({ id: sid++, type: shapeType, a: shapeAnchor, b: p });
+        // Línia: mode continu — el segon clic esdevé l'ancoratge del següent tram
+        // (com AutoCAD). Rectangle i cercle: acaben i esperen un nou 1r clic.
+        shapeAnchor = (shapeType === 'line') ? p : null;
         removePreview();
         rebuild(); changed();
       }
