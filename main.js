@@ -5375,8 +5375,32 @@ function onMeasureHoverMove(event) {
     n.applyMatrix3(nm).normalize();
     normal = n;
   }
+  // Si no hem obtingut normal (vista de punts, XYZ/PLY): busquem la normal a la
+  // malla texturada del mateix núvol (encara que estigui amagada) — així el disc
+  // s'orienta a la superfície real també en vista de núvol.
   if (!normal) {
-    // Sense normal (núvol de punts): fem que el disc miri a càmera
+    const meshCandidates = [];
+    for (const c of clouds) {
+      const mv = c.userData?.meshView;
+      if (!mv) continue;
+      mv.traverse(o => { if (o.isMesh && o.geometry) meshCandidates.push(o); });
+    }
+    if (meshCandidates.length > 0) {
+      const prev = meshCandidates.map(m => m.visible);
+      meshCandidates.forEach(m => { m.visible = true; });
+      const mHits = raycaster.intersectObjects(meshCandidates, false);
+      meshCandidates.forEach((m, i) => { m.visible = prev[i]; });
+      const closest = mHits.find(h => h.face && h.point && h.point.distanceTo(p) < Math.max(0.5, cam.position.distanceTo(p) * 0.05));
+      if (closest && closest.face) {
+        const n = closest.face.normal.clone();
+        const nm = new THREE.Matrix3().getNormalMatrix(closest.object.matrixWorld);
+        n.applyMatrix3(nm).normalize();
+        normal = n;
+      }
+    }
+  }
+  if (!normal) {
+    // Sense normal (núvol de punts sense malla): fem que el disc miri a càmera
     normal = new THREE.Vector3().subVectors(cam.position, p).normalize();
   }
   const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
