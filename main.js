@@ -207,9 +207,10 @@ async function _getFBXLoader() {
   return _FBXLoaderCache;
 }
 
-async function loadFBX(file) {
+async function loadFBX(file, keepRaw) {
   const FBXLoader = await _getFBXLoader();
   const buf = await file.arrayBuffer();
+  const rawFbxBytes = new Uint8Array(buf.slice(0));
   const loader = new FBXLoader();
   let root;
   try {
@@ -292,11 +293,35 @@ async function loadFBX(file) {
   cloud.name = file.name;
   cloud.add(meshGroup);
   cloud.userData.meshView = meshGroup;
+  cloud.userData.fbxBytes = rawFbxBytes;   // per reconstruir la malla en reobrir el projecte
   // Per defecte mostrem la malla (com fa GLB)
   meshGroup.visible = true;
   cloud.material.visible = false;
   diag('FBX ' + file.name + ': ' + (allPositions.length/3|0) + ' vèrtexs, ' + meshGroup.children.length + ' malles' + unitNote);
   return cloud;
+}
+
+// Reconstrueix la vista de malla FBX (com attachMeshFromGlb, però per FBX).
+async function attachMeshFromFbx(cloud) {
+  const bytes = cloud.userData?.fbxBytes;
+  if (!bytes || cloud.userData.meshView) return;
+  try {
+    const name = cloud.name || 'restored.fbx';
+    const f = new File([bytes], name, { type: 'application/octet-stream' });
+    const rebuilt = await loadFBX(f);
+    const mv = rebuilt.userData?.meshView;
+    if (mv) {
+      cloud.add(mv);
+      cloud.userData.meshView = mv;
+      // Per FBX, per defecte mostrem la malla i amaguem el núvol
+      mv.visible = true;
+      cloud.material.visible = false;
+      updateClipPlanes?.();
+      updateCloudList?.();
+    }
+    rebuilt.geometry?.dispose?.();
+    rebuilt.material?.dispose?.();
+  } catch (e) { diag('⚠ FBX malla no reconstruïda: ' + e.message); }
 }
 
 async function loadOBJ(file, companions) {
@@ -5945,6 +5970,7 @@ function _serializeCloud(cloud) {
     pos: pos ? pos.array.slice(0) : null,
     col: col ? col.array.slice(0) : null,
     glb: cloud.userData?.glbBytes || null,   // per poder reconstruir la vista de malla
+    fbx: cloud.userData?.fbxBytes || null,   // per poder reconstruir la vista de malla FBX
     glbList: cloud.userData?.glbBytesList
       ? cloud.userData.glbBytesList.map(e => ({ bytes: e.bytes, matrix: Array.from(e.matrix.elements) }))
       : null,   // per reconstruir la malla d'un núvol unit
@@ -5969,6 +5995,7 @@ function _deserializeCloud(d) {
     cloud.matrix.decompose(cloud.position, cloud.quaternion, cloud.scale);
   }
   if (d.glb) cloud.userData.glbBytes = d.glb instanceof Uint8Array ? d.glb : new Uint8Array(d.glb);
+  if (d.fbx) cloud.userData.fbxBytes = d.fbx instanceof Uint8Array ? d.fbx : new Uint8Array(d.fbx);
   if (d.glbList && Array.isArray(d.glbList) && d.glbList.length) {
     cloud.userData.glbBytesList = d.glbList.map(e => {
       const bytes = e.bytes instanceof Uint8Array ? e.bytes : new Uint8Array(e.bytes || []);
@@ -6223,6 +6250,7 @@ async function restoreSession() {
         scene.add(cloud); clouds.push(cloud); selectableObjects.push(cloud);
         if (cloud.userData?.glbBytesList) attachMergedMeshFromGlbs(cloud);
         else if (cloud.userData?.glbBytes) attachMeshFromGlb(cloud);
+        else if (cloud.userData?.fbxBytes) attachMeshFromFbx(cloud);
       }
       const last = clouds[clouds.length - 1];
       selectCloud(last);
@@ -6272,6 +6300,7 @@ function _buildProjectData() {
       name: c.name, visible: c.visible, matrix: c.matrix, size: c.size,
       pos: _f32ToB64(c.pos), col: c.col ? _f32ToB64(c.col) : null,
       glb: c.glb ? _u8ToB64(c.glb) : null,
+      fbx: c.fbx ? _u8ToB64(c.fbx) : null,
       glbList: c.glbList ? c.glbList.map(e => ({ bytes: _u8ToB64(e.bytes), matrix: e.matrix })) : null,
     })),
     drawing: s.drawing,
@@ -6305,6 +6334,7 @@ async function loadProject(file) {
       name: cd.name, visible: cd.visible, matrix: cd.matrix, size: cd.size,
       pos: _b64ToF32(cd.pos), col: cd.col ? _b64ToF32(cd.col) : null,
       glb: cd.glb ? _b64ToU8(cd.glb) : null,
+      fbx: cd.fbx ? _b64ToU8(cd.fbx) : null,
       glbList: cd.glbList ? cd.glbList.map(e => ({ bytes: _b64ToU8(e.bytes), matrix: e.matrix })) : null,
     });
     scene.add(cloud); clouds.push(cloud); selectableObjects.push(cloud);
