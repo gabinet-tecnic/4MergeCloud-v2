@@ -5955,12 +5955,27 @@ const idbPut = (key, val) => _idbTx('readwrite', s => s.put(val, key));
 const idbGet = (key) => _idbTx('readonly',  s => s.get(key));
 const idbDel = (key) => _idbTx('readwrite', s => s.delete(key));
 
+// Límit de mida per als bytes originals guardats a l'auto-sessió (IndexedDB).
+// Els FBX de Polycam/Scaniverse solen ser 50-200 MB; si els incloem al persist
+// automàtic pot fer petar la quota i corrompre la sessió. Els deixem només al
+// desat explícit .4mc. 25 MB permet GLB petits sense problemes.
+const _MAX_AUTO_BYTES = 25 * 1024 * 1024;
+
 // núvol → objecte serialitzable (posicions/colors com a Float32Array; matriu de món)
-function _serializeCloud(cloud) {
+// includeBigBytes=true: sempre guarda els bytes originals (per al .4mc explícit).
+// includeBigBytes=false (per defecte): descarta bytes grans per no petar l'auto-persist.
+function _serializeCloud(cloud, includeBigBytes) {
   const g = cloud.geometry;
   const pos = g.getAttribute('position');
   const col = g.getAttribute('color');
   cloud.updateMatrix();
+  const glb = cloud.userData?.glbBytes;
+  const fbx = cloud.userData?.fbxBytes;
+  const glbList = cloud.userData?.glbBytesList;
+  const glbListTotal = glbList ? glbList.reduce((s, e) => s + (e.bytes?.length || 0), 0) : 0;
+  const includeGlb  = glb  && (includeBigBytes || glb.length  <= _MAX_AUTO_BYTES);
+  const includeFbx  = fbx  && (includeBigBytes || fbx.length  <= _MAX_AUTO_BYTES);
+  const includeList = glbList && (includeBigBytes || glbListTotal <= _MAX_AUTO_BYTES);
   return {
     name: cloud.name || 'Núvol',
     visible: cloud.visible !== false,
@@ -5969,11 +5984,11 @@ function _serializeCloud(cloud) {
     sizeAttenuation: cloud.material?.sizeAttenuation ?? false,   // clau: sense això els punts es veien com a blobs de món
     pos: pos ? pos.array.slice(0) : null,
     col: col ? col.array.slice(0) : null,
-    glb: cloud.userData?.glbBytes || null,   // per poder reconstruir la vista de malla
-    fbx: cloud.userData?.fbxBytes || null,   // per poder reconstruir la vista de malla FBX
-    glbList: cloud.userData?.glbBytesList
-      ? cloud.userData.glbBytesList.map(e => ({ bytes: e.bytes, matrix: Array.from(e.matrix.elements) }))
-      : null,   // per reconstruir la malla d'un núvol unit
+    glb: includeGlb ? glb : null,
+    fbx: includeFbx ? fbx : null,
+    glbList: includeList
+      ? glbList.map(e => ({ bytes: e.bytes, matrix: Array.from(e.matrix.elements) }))
+      : null,
   };
 }
 function _deserializeCloud(d) {
@@ -6008,10 +6023,12 @@ function _deserializeCloud(d) {
 }
 
 // Recull l'estat actual de la sessió (núvols + dibuix CAD)
-function _collectSession() {
+// includeBigBytes=true: inclou bytes originals grans (per al .4mc explícit).
+// includeBigBytes=false: descarta bytes grans (auto-persist a IndexedDB).
+function _collectSession(includeBigBytes) {
   return {
     v: 1, t: Date.now(),
-    clouds: clouds.map(_serializeCloud),
+    clouds: clouds.map(c => _serializeCloud(c, includeBigBytes)),
     drawing: _ed2d ? _ed2d.getState() : (JSON.parse(localStorage.getItem('mc_editor_state') || 'null')),
   };
 }
@@ -6293,7 +6310,8 @@ function _b64ToU8(b64) {
   return bytes;
 }
 function _buildProjectData() {
-  const s = _collectSession();
+  // El desat explícit inclou els bytes originals (per poder restaurar la malla)
+  const s = _collectSession(true);
   return {
     format: '4mc-project', version: 1, t: s.t,
     clouds: s.clouds.map(c => ({
@@ -6309,22 +6327,40 @@ function _buildProjectData() {
 // Retorna el projecte serialitzat com a Blob + nom suggerit — útil per pujar-lo a Drive.
 window.buildProjectBlob = function () {
   if (clouds.length === 0 && !(_ed2d && _ed2d.count().walls)) { alert('No hi ha res per desar encara. Carrega un núvol o dibuixa una planta.'); return null; }
-  const data = _buildProjectData();
-  const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
-  const name = 'projecte_' + new Date().toISOString().slice(0, 10) + '.4mc';
-  return { blob, name };
+  try {
+    const data = _buildProjectData();
+    const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+    const name = 'projecte_' + new Date().toISOString().slice(0, 10) + '.4mc';
+    return { blob, name };
+  } catch (e) {
+    diag('⚠ error serialitzant projecte: ' + e.message);
+    alert('No s\'ha pogut serialitzar el projecte (probablement massa gran): ' + e.message);
+    return null;
+  }
 };
 function saveProject() {
   if (clouds.length === 0 && !(_ed2d && _ed2d.count().walls)) { alert('No hi ha res per desar encara. Carrega un núvol o dibuixa una planta.'); return; }
-  const data = _buildProjectData();
-  const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'projecte_' + new Date().toISOString().slice(0, 10) + '.4mc';
-  document.body.appendChild(a); a.click(); document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-  diag('projecte desat com a .4mc (' + data.clouds.length + ' núvols)');
-  return data.clouds.length;
+  let data, blob;
+  try {
+    data = _buildProjectData();
+    blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+  } catch (e) {
+    diag('⚠ error serialitzant projecte: ' + e.message);
+    alert('No s\'ha pogut desar el projecte (probablement massa gran per fer un .4mc): ' + e.message);
+    return;
+  }
+  try {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'projecte_' + new Date().toISOString().slice(0, 10) + '.4mc';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    diag('projecte desat com a .4mc (' + data.clouds.length + ' núvols, ' + (blob.size/1024/1024).toFixed(1) + ' MB)');
+    return data.clouds.length;
+  } catch (e) {
+    diag('⚠ error descarregant .4mc: ' + e.message);
+    alert('No s\'ha pogut descarregar el .4mc: ' + e.message);
+  }
 }
 async function loadProject(file) {
   const data = JSON.parse(await file.text());
