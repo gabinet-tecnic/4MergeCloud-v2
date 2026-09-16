@@ -242,7 +242,7 @@ async function loadFBX(file, keepRaw) {
     const basicMats = mats.map(m => {
       const map = m?.map || null;
       const color = m?.color ? m.color.clone() : new THREE.Color(0xcccccc);
-      return new THREE.MeshBasicMaterial({ map, color, side: window._meshSide?.() ?? THREE.BackSide, vertexColors: !!g.attributes.color });
+      return new THREE.MeshBasicMaterial({ map, color, side: window._meshSide?.() ?? THREE.DoubleSide, vertexColors: !!g.attributes.color });
     });
     clone.material = Array.isArray(o.material) ? basicMats : basicMats[0];
     meshGroup.add(clone);
@@ -679,11 +679,11 @@ async function loadGLB(file, companions) {
         let meshMat;
         if (bct) {
           const tex3d = await getThreeTexture(bct.index);
-          meshMat = new THREE.MeshBasicMaterial({ map: tex3d, side: window._meshSide?.() ?? THREE.BackSide, color: 0xffffff, vertexColors: !!vcol });
+          meshMat = new THREE.MeshBasicMaterial({ map: tex3d, side: window._meshSide?.() ?? THREE.DoubleSide, color: 0xffffff, vertexColors: !!vcol });
         } else if (vcol) {
-          meshMat = new THREE.MeshBasicMaterial({ vertexColors: true, side: window._meshSide?.() ?? THREE.BackSide });
+          meshMat = new THREE.MeshBasicMaterial({ vertexColors: true, side: window._meshSide?.() ?? THREE.DoubleSide });
         } else {
-          meshMat = new THREE.MeshBasicMaterial({ color: pbr?.baseColorFactor ? new THREE.Color(baseF[0], baseF[1], baseF[2]) : 0xcccccc, side: window._meshSide?.() ?? THREE.BackSide });
+          meshMat = new THREE.MeshBasicMaterial({ color: pbr?.baseColorFactor ? new THREE.Color(baseF[0], baseF[1], baseF[2]) : 0xcccccc, side: window._meshSide?.() ?? THREE.DoubleSide });
         }
         meshGroup.add(new THREE.Mesh(meshGeo, meshMat));
       } catch (_) { /* si algo falla amb la malla, seguim amb els punts */ }
@@ -808,7 +808,7 @@ async function attachMergedMeshFromGlbs(cloud) {
             const hasVCol = !!src.vertexColors && !!g.getAttribute('color');
             const baseCol = src.color?.clone?.() || new THREE.Color(0xffffff);
             const newMat = new THREE.MeshBasicMaterial({
-              map: src.map || null, color: baseCol, vertexColors: hasVCol, side: window._meshSide?.() ?? THREE.BackSide,
+              map: src.map || null, color: baseCol, vertexColors: hasVCol, side: window._meshSide?.() ?? THREE.DoubleSide,
             });
             meshGroup.add(new THREE.Mesh(g, newMat));
           }
@@ -7108,8 +7108,11 @@ function initTopUI() {
   // Barra superior — accions globals
   document.getElementById('tbOpen')?.addEventListener('click', () => document.getElementById('fileInput')?.click());
   document.getElementById('tbMerge')?.addEventListener('click', () => mergeCloudsInScene());
-  // Vista Interior / Tot: alterna entre BackSide (com Polycam) i DoubleSide.
-  window._meshSideMode = 'back';   // 'back' = interior; 'double' = veure tot
+  // Vista Interior / Tot: alterna entre BackSide (com Polycam, útil per escaneigs
+  // d'habitacions tancades) i DoubleSide (segur per a qualsevol escaneig).
+  // Per defecte "double" perquè molts escaneigs (peces, exteriors, superfícies primes)
+  // es veurien amb forats amb BackSide.
+  window._meshSideMode = 'double';
   window._meshSide = () => window._meshSideMode === 'back' ? THREE.BackSide : THREE.DoubleSide;
   const _tbMeshSide = document.getElementById('tbMeshSide');
   function _applyMeshSideToAll() {
@@ -7124,7 +7127,7 @@ function initTopUI() {
         }
       });
     }
-    if (_tbMeshSide) _tbMeshSide.textContent = window._meshSideMode === 'back' ? 'Interior' : 'Tot';
+    if (_tbMeshSide) _tbMeshSide.textContent = window._meshSideMode === 'back' ? 'Interior ✓' : 'Interior';
   }
   _tbMeshSide?.addEventListener('click', () => {
     window._meshSideMode = window._meshSideMode === 'back' ? 'double' : 'back';
