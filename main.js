@@ -800,10 +800,18 @@ async function attachMergedMeshFromGlbs(cloud) {
       if (mv) {
         const wm = new THREE.Matrix4();
         if (Array.isArray(matArr) && matArr.length === 16) wm.fromArray(matArr);
+        else if (matArr && matArr.elements) wm.copy(matArr);
+        // Cal actualitzar les matrius de món de la jerarquia acabada de crear
+        // per poder combinar la matriu local de cada malla amb la matriu del
+        // núvol origen en el moment de la fusió (evita mala alineació / triangles
+        // fragmentats en recuperar un projecte unit).
+        rebuilt.updateMatrixWorld(true);
         mv.traverse(o => {
           if (o.isMesh && o.geometry) {
+            o.updateMatrixWorld(true);
             const g = o.geometry.clone();
-            g.applyMatrix4(wm);
+            const combined = new THREE.Matrix4().multiplyMatrices(wm, o.matrixWorld);
+            g.applyMatrix4(combined);
             const src = o.material || {};
             const hasVCol = !!src.vertexColors && !!g.getAttribute('color');
             const baseCol = src.color?.clone?.() || new THREE.Color(0xffffff);
