@@ -6335,30 +6335,62 @@ function _buildProjectData() {
   };
 }
 // Retorna el projecte serialitzat com a Blob + nom suggerit — útil per pujar-lo a Drive.
-window.buildProjectBlob = function () {
-  if (clouds.length === 0 && !(_ed2d && _ed2d.count().walls)) { alert('No hi ha res per desar encara. Carrega un núvol o dibuixa una planta.'); return null; }
+// Intenta serialitzar el projecte incloent tots els bytes originals. Si el
+// resultat supera el límit de longitud de cadena (uns 512 MB a V8), fa una
+// segona passada sense els bytes grans (només punts + malla no es podrà
+// reconstruir del GLB/FBX en obrir-lo). Retorna { data, blob, degraded }.
+function _serializeProjectSafely() {
+  // 1) Intent complet
   try {
     const data = _buildProjectData();
     const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+    return { data, blob, degraded: false };
+  } catch (e1) {
+    diag('⚠ desat complet fallat: ' + e1.message + ' → provo sense bytes originals');
+    // 2) Intent lleuger: sense glb/fbx/glbList originals (les malles no es
+    // podran reconstruir del GLB/FBX, però el núvol i el dibuix es desen bé)
+    try {
+      const s = _collectSession(false);
+      const data = { format:'4mc-project', version:1, t: s.t,
+        clouds: s.clouds.map(c => ({
+          name:c.name, visible:c.visible, matrix:c.matrix, size:c.size,
+          pos: _f32ToB64(c.pos), col: c.col ? _f32ToB64(c.col) : null,
+          glb:null, fbx:null, glbList:null,
+        })),
+        drawing: s.drawing,
+      };
+      const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+      return { data, blob, degraded: true };
+    } catch (e2) {
+      throw new Error('massa gran fins i tot sense malla: ' + e2.message);
+    }
+  }
+}
+
+window.buildProjectBlob = function () {
+  if (clouds.length === 0 && !(_ed2d && _ed2d.count().walls)) { alert('No hi ha res per desar encara. Carrega un núvol o dibuixa una planta.'); return null; }
+  try {
+    const { blob, degraded } = _serializeProjectSafely();
+    if (degraded) alert('El projecte és massa gran per desar la malla dins el .4mc.\nEs desarà només el núvol de punts i el dibuix. Al reobrir-lo no podràs canviar a vista Malla.');
     const name = 'projecte_' + new Date().toISOString().slice(0, 10) + '.4mc';
     return { blob, name };
   } catch (e) {
     diag('⚠ error serialitzant projecte: ' + e.message);
-    alert('No s\'ha pogut serialitzar el projecte (probablement massa gran): ' + e.message);
+    alert('No s\'ha pogut serialitzar el projecte: ' + e.message);
     return null;
   }
 };
 function saveProject() {
   if (clouds.length === 0 && !(_ed2d && _ed2d.count().walls)) { alert('No hi ha res per desar encara. Carrega un núvol o dibuixa una planta.'); return; }
-  let data, blob;
+  let data, blob, degraded;
   try {
-    data = _buildProjectData();
-    blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+    ({ data, blob, degraded } = _serializeProjectSafely());
   } catch (e) {
     diag('⚠ error serialitzant projecte: ' + e.message);
-    alert('No s\'ha pogut desar el projecte (probablement massa gran per fer un .4mc): ' + e.message);
+    alert('No s\'ha pogut desar el projecte: ' + e.message);
     return;
   }
+  if (degraded) alert('El projecte és massa gran per desar la malla dins el .4mc.\nEs desarà només el núvol de punts i el dibuix. Al reobrir-lo no podràs canviar a vista Malla.');
   try {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
