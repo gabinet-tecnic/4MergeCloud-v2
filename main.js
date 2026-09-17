@@ -6560,7 +6560,7 @@ Si no trobes els objectes, retorna objectes=[].`;
       'anthropic-dangerous-direct-browser-access': 'true'
     },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-6',
+      model: 'claude-sonnet-5',
       max_tokens: 1024,
       system: sysPrompt,
       messages: [{
@@ -6602,6 +6602,39 @@ Si no trobes els objectes, retorna objectes=[].`;
   }));
 
   _cmdLog(`🔍 ${parsed.resposta || parsed.objectes.length + ' objecte(s) trobat(s)'}`, 'cmd-x');
+
+  // Operació especial: en lloc de modificar punts, dibuixa un cercle CAD a cada
+  // detecció al mòdul DIBUIX. Cada objecte queda com una forma que després es
+  // pot moure, esborrar i exportar a DXF.
+  if (operacio === 'marcar_cad') {
+    if (!_ed2d) {
+      // Assegura't que l'editor està carregat
+      try { await activateEditor(); } catch (_) {}
+    }
+    if (!_ed2d) return 'No s\'ha pogut activar l\'editor de dibuix per marcar els objectes.';
+    // Colors per categoria (colors base; l'editor2d ho pintarà en taronja general
+    // però nosaltres afegim també un label sprite a la posició).
+    let placed = 0;
+    for (const obj of worldObjs) {
+      const cx = (obj.wx1 + obj.wx2) / 2;
+      const cz = (obj.wz1 + obj.wz2) / 2;
+      const halfW = Math.max(0.05, (obj.wx2 - obj.wx1) / 2);
+      const halfH = Math.max(0.05, (obj.wz2 - obj.wz1) / 2);
+      const r = Math.max(halfW, halfH) * 0.6;   // radi del cercle una mica menor que el bbox
+      // Centre i punt del radi (a la dreta del centre)
+      const a = { x: cx, y: 0, z: cz };
+      const b = { x: cx + r, y: 0, z: cz };
+      _ed2d.addShape?.({ type: 'circle', a, b, label: obj.tipus });
+      // Label amb sprite per veure de què es tracta
+      try {
+        const spr = createLabelSprite(obj.tipus || '?', Math.max(0.03, r * 0.4));
+        spr.position.set(cx, 0.02, cz - r - 0.1);
+        scene.add(spr);
+      } catch (_) {}
+      placed++;
+    }
+    return `✓ ${placed} marcador(s) CAD col·locat(s) al dibuix (${parsed.objectes.length} objecte(s) detectat(s)).`;
+  }
 
   const targetClouds = selectedCloud ? [selectedCloud] : clouds;
   let total = 0;
@@ -6723,7 +6756,7 @@ const AI_TOOLS = [
       type: 'object',
       properties: {
         query:   { type: 'string', description: 'What to find visually in the cloud (e.g. "llits", "cadires i taules", "vegetació")' },
-        operacio: { type: 'string', enum: ['seleccionar','eliminar','substituir_terra','canviar_color'], description: 'seleccionar=highlight orange, eliminar=delete points, substituir_terra=replace with floor level, canviar_color=paint a color' },
+        operacio: { type: 'string', enum: ['seleccionar','eliminar','substituir_terra','canviar_color','marcar_cad'], description: 'seleccionar=highlight orange, eliminar=delete points, substituir_terra=replace with floor level, canviar_color=paint a color, marcar_cad=place a CAD circle marker at each detected object in the drawing editor' },
         color:   { type: 'string', description: 'Hex color like #ff0000, only needed for canviar_color' }
       },
       required: ['query', 'operacio']
@@ -6895,7 +6928,7 @@ INSTRUCCIONS:
         'content-type': 'application/json'
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
+        model: 'claude-sonnet-5',
         max_tokens: 512,
         system: systemPrompt,
         messages: _aiHistory.slice(),
@@ -7294,6 +7327,27 @@ function _wireEditorButtons(ed) {
   document.getElementById('edModeLineClick')?.addEventListener('click', () => { ed.setMode('line-click'); _edSetModeBtn('line-click'); });
   document.getElementById('edModeRect')?.addEventListener('click', () => { ed.setMode('rect'); _edSetModeBtn('rect'); });
   document.getElementById('edModeCircle')?.addEventListener('click', () => { ed.setMode('circle'); _edSetModeBtn('circle'); });
+  // Detecció d'objectes amb IA (Claude Vision) → col·loca marcadors al dibuix
+  document.getElementById('aiDetectBtn')?.addEventListener('click', async () => {
+    const q = document.getElementById('aiDetectQuery')?.value?.trim();
+    if (!q) { alert('Escriu què vols detectar (p. ex. "llums d\'emergència i detectors de fum").'); return; }
+    if (!localStorage.getItem('ai_api_key')) {
+      const k = prompt('Cal una clau API d\'Anthropic (comença per "sk-ant-…"). Enganxa-la aquí:');
+      if (!k) return;
+      localStorage.setItem('ai_api_key', k.trim());
+    }
+    const btn = document.getElementById('aiDetectBtn');
+    const oldTxt = btn.textContent;
+    btn.disabled = true; btn.textContent = '⏳ Analitzant…';
+    try {
+      const res = await _semanticVisionEdit(q, 'marcar_cad', null);
+      alert(res || 'Fet.');
+    } catch (e) {
+      alert('Error: ' + e.message);
+    } finally {
+      btn.disabled = false; btn.textContent = oldTxt;
+    }
+  });
   document.getElementById('edModeEdit').onclick  = () => { ed.setMode('edit'); _edSetModeBtn('edit'); };
   document.getElementById('edModeErase').onclick = () => { ed.setMode('erase'); _edSetModeBtn('erase'); };
   document.getElementById('edModeThick').onclick = () => { ed.setMode('thickness'); _edSetModeBtn('thickness'); };

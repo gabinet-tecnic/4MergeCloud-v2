@@ -1070,12 +1070,17 @@ export function createEditor2D(ctx) {
         cloudIdx = 0; applyCloud();   // restaura el núvol al sortir
       }
     },
+    // Afegeix una forma programàticament (per exemple, des de la detecció d'objectes IA).
+    addShape(sh) {
+      if (!sh || !sh.type || !sh.a || !sh.b) return;
+      shapes.push({ id: sid++, type: sh.type, a: { ...sh.a }, b: { ...sh.b }, label: sh.label || null });
+      rebuild(); changed();
+    },
     setMode(m) {
       mode = m; drawing = false; freePts = []; hoverId = null;
       shapeAnchor = null;
       removePreview();
-      if (m !== 'thickness') { selWall = null; measuring = false; measurePts = []; }
-      if (m !== 'select') { selSet.clear(); }
+      if (m !== 'thickness') { selWall = null; measuring = false; measurePts = []; }      if (m !== 'select') { selSet.clear(); }
       boxStart = null; boxNow = null; hideSelBox();
       opPick = null; opPickPt = null; opDrag = null;
       removePreview(); rebuild();
