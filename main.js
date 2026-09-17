@@ -1116,6 +1116,8 @@ function init() {
 
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0x0e1117);
+  // Exposició per a depuració des de la consola del navegador
+  try { window.__mc = { scene, clouds, THREE, get camera(){return camera;}, get renderer(){return renderer;} }; } catch (_) {}
   scene.add(new THREE.AxesHelper(1));
 
   camera = new THREE.PerspectiveCamera(60, width / height, 0.01, 1e7);
