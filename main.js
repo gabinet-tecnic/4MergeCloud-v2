@@ -6414,10 +6414,26 @@ function onMouseWheel(event) {
 // ─────────────────────────────────────────────
 
 function _captureSceneImage() {
-  // Renderitza la vista de planta i retorna base64 JPEG
+  // Renderitza a alta resolució per capturar detalls petits (llums, detectors…)
   const cam = (useOrtho && orthoCamera) ? orthoCamera : camera;
+  const prevSize = renderer.getSize(new THREE.Vector2());
+  const prevPR = renderer.getPixelRatio();
+  // Puja a ~2048px pel costat més gran mantenint la relació
+  const maxSide = 2048;
+  const scale = Math.min(maxSide / Math.max(prevSize.x, prevSize.y), 3);
+  if (scale > 1.01) {
+    renderer.setPixelRatio(1);
+    renderer.setSize(Math.round(prevSize.x * scale), Math.round(prevSize.y * scale), false);
+  }
   renderer.render(scene, cam);
-  return renderer.domElement.toDataURL('image/jpeg', 0.85).split(',')[1];
+  const data = renderer.domElement.toDataURL('image/jpeg', 0.95).split(',')[1];
+  if (scale > 1.01) {
+    renderer.setPixelRatio(prevPR);
+    renderer.setSize(prevSize.x, prevSize.y, false);
+    renderer.render(scene, cam);
+  }
+  try { window._lastVisionImage = 'data:image/jpeg;base64,' + data; } catch (_) {}
+  return data;
 }
 
 function _cloudWorldBBox() {
@@ -6539,17 +6555,29 @@ async function _semanticVisionEdit(query, operacio, colorHex) {
   const bbox  = _cloudWorldBBox();
   if (!bbox) return 'No s\'ha pogut calcular els límits del núvol.';
 
-  const sysPrompt = `Ets un expert en interpretació visual de núvols de punts 3D (vista de planta).
-Analitza la imatge i localitza els objectes demanats.
-Retorna ÚNICAMENT un JSON vàlid, sense text addicional:
+  const sysPrompt = `Ets un expert en interpretar núvols de punts 3D d'escaneigs d'interiors, VISTA DE PLANTA (des de dalt cap avall, mirant el sostre o el terra).
+La imatge és un núvol de punts real, no una foto: pot tenir soroll, buits, i colors atenuats.
+
+Objectes típics de sostre a detectar (aparences habituals a la vista de planta):
+- Llums d'emergència: rectangles allargats petits, sovint blancs/grisos/taronges (10–40 cm de llarg).
+- Detectors de fum: cercles o discos petits (~10–15 cm de diàmetre), sovint blancs, sortint del pla del sostre.
+- Detectors de moviment: rectangles/cubs petits als angles o parets.
+- Focus/downlights: cercles regulars al pla del sostre.
+- Sortides/reixes AC: rectangles llargs amb textura ratllada.
+- Alarmes/sirenes: rectangles vermells/blancs.
+
+INSPECCIONA la imatge amb detall: cerca formes petites, canvis de color subtils, discontinuïtats geomètriques. NO omitis objectes petits: sovint són els més importants.
+
+Retorna ÚNICAMENT un JSON vàlid, sense text addicional ni markdown:
 {
   "objectes": [
-    {"tipus": "nom_objecte", "bbox_norm": {"x1":0.0,"z1":0.0,"x2":1.0,"z2":1.0}}
+    {"tipus": "nom_objecte_curt", "bbox_norm": {"x1":0.0,"z1":0.0,"x2":1.0,"z2":1.0}, "confianca": 0.0}
   ],
-  "resposta": "text breu explicatiu"
+  "resposta": "text breu explicatiu (què has vist i quants)"
 }
-Les coordenades bbox_norm van de 0.0 (esquerra/dalt) a 1.0 (dreta/baix) en la imatge.
-Si no trobes els objectes, retorna objectes=[].`;
+bbox_norm: x1/x2 horitzontal, z1/z2 vertical (0=dalt/esquerra, 1=baix/dreta) — SEMPRE respecte la imatge sencera.
+Ajusta la caixa ben ajustada a cada objecte (no facis caixes gegants).
+Si dubtes, inclou l'objecte amb confianca<0.5. Si REALMENT no veus res, retorna objectes=[] i explica què hi ha a la imatge.`;
 
   const resp = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -6580,15 +6608,19 @@ Si no trobes els objectes, retorna objectes=[].`;
 
   const data = await resp.json();
   const raw  = data.content?.[0]?.text || '';
+  try { window._lastVisionResponse = raw; } catch (_) {}
+  _cmdLog('📝 Resposta IA: ' + raw.slice(0, 500), 'cmd-sys');
   const jsonMatch = raw.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) return 'La IA no ha retornat un format vàlid.';
+  if (!jsonMatch) return 'La IA no ha retornat un format vàlid. Resposta: ' + raw.slice(0, 200);
 
   let parsed;
   try { parsed = JSON.parse(jsonMatch[0]); }
-  catch { return 'Error parsejant la resposta de la IA.'; }
+  catch { return 'Error parsejant la resposta de la IA. Resposta: ' + raw.slice(0, 200); }
 
-  if (!parsed.objectes || parsed.objectes.length === 0)
-    return `No s'han trobat objectes del tipus "${query}" a la vista actual.`;
+  if (!parsed.objectes || parsed.objectes.length === 0) {
+    const expl = parsed.resposta ? ' — ' + parsed.resposta : '';
+    return `No s'han trobat objectes del tipus "${query}" a la vista actual.${expl}\n\nProva: vista de planta ben enquadrada, zoom al sostre, i escriu la consulta en singular i concret (p.ex. "llum d'emergència rectangular petita blanca").`;
+  }
 
   // Converteix coordenades normalitzades → coordenades món
   const rangeX = bbox.max.x - bbox.min.x;
@@ -7341,7 +7373,13 @@ function _wireEditorButtons(ed) {
     btn.disabled = true; btn.textContent = '⏳ Analitzant…';
     try {
       const res = await _semanticVisionEdit(q, 'marcar_cad', null);
-      alert(res || 'Fet.');
+      const msg = (res || 'Fet.') + '\n\nVols veure la imatge que s\'ha enviat a la IA (per comprovar què veu)?';
+      if (confirm(msg) && window._lastVisionImage) {
+        const w = window.open('', '_blank');
+        if (w) {
+          w.document.write('<title>Imatge enviada a la IA</title><body style="margin:0;background:#111"><img src="' + window._lastVisionImage + '" style="max-width:100%;display:block;margin:auto"><pre style="color:#ddd;font:12px monospace;white-space:pre-wrap;padding:12px">' + (window._lastVisionResponse || '').replace(/[<&]/g, c=>c==='<'?'&lt;':'&amp;') + '</pre></body>');
+        }
+      }
     } catch (e) {
       alert('Error: ' + e.message);
     } finally {
