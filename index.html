@@ -1294,6 +1294,10 @@
         #cmdLine { display: none !important; }
         /* Segmentació IA (client heurístic + panell de dataset) */
         #segIABlock { display: none !important; }
+        /* Bloc de detecció IA al DIBUIX — mogut al botó del menú superior "🤖 IA" */
+        #aiDetectRow { display: none !important; }
+        /* Copiar per a IA (JSON) al llaç — dintre de la secció IA que treballarem a part */
+        #btnPickExport { display: none !important; }
       </style>
       <div id="cmdHistory"></div>
       <div id="cmdInputRow">
@@ -1323,7 +1327,7 @@
   <script src="https://apis.google.com/js/api.js" async defer></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script src="drive.js"></script>
-  <script type="module" src="main.js?v=2026091801"></script>
+  <script type="module" src="main.js?v=2026091802"></script>
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
