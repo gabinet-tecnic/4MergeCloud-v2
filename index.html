@@ -842,7 +842,7 @@
       </div>
 
       <!-- SELECCIÓ (LLAÇ) — 2D → frustum 3D → punts ressaltats + export IA -->
-      <div class="acc">
+      <div class="acc" id="accPickWrap">
         <div class="acc-header" data-acc="accPick">
           <span><span class="acc-icon">&#9678;</span>Selecció (llaç)</span>
           <span class="acc-arrow">&#9654;</span>
@@ -1298,6 +1298,8 @@
         #aiDetectRow { display: none !important; }
         /* Copiar per a IA (JSON) al llaç — dintre de la secció IA que treballarem a part */
         #btnPickExport { display: none !important; }
+        /* Selecció (llaç) sencera — alimenta la IA i inclou "Reparar Superfície" (RANSAC) */
+        #accPickWrap { display: none !important; }
       </style>
       <div id="cmdHistory"></div>
       <div id="cmdInputRow">
@@ -1327,7 +1329,7 @@
   <script src="https://apis.google.com/js/api.js" async defer></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script src="drive.js"></script>
-  <script type="module" src="main.js?v=2026091803"></script>
+  <script type="module" src="main.js?v=2026091804"></script>
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {

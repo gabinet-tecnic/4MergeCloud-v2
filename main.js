@@ -7971,8 +7971,20 @@ try { initDiagUI(); } catch(e) { console.error('initDiagUI() crashed:', e); }
 // Neteja runtime dels blocs IA que puguin haver quedat al DOM si l'HTML està cachejat.
 // L'IA té el seu botó "🤖 IA" propi al menú superior — la resta ha de quedar amagada.
 try {
-  const killIds = ['aiDetectRow', 'btnPickExport', 'apiKeyRow', 'cmdLine', 'segIABlock'];
-  const kill = () => killIds.forEach(id => { const el = document.getElementById(id); if (el) { el.style.setProperty('display','none','important'); } });
+  const killIds = ['aiDetectRow', 'btnPickExport', 'apiKeyRow', 'cmdLine', 'segIABlock', 'accPickWrap'];
+  const kill = () => {
+    killIds.forEach(id => { const el = document.getElementById(id); if (el) el.style.setProperty('display','none','important'); });
+    // Fallback: amaga el bloc "Selecció (llaç)" trobant-lo pel data-acc de l'accordió
+    document.querySelectorAll('[data-acc="accPick"]').forEach(h => {
+      const wrap = h.closest('.acc');
+      if (wrap) wrap.style.setProperty('display','none','important');
+    });
+    // Fallback: amaga per data-acc="accSemantic" (segmentació semàntica IA)
+    document.querySelectorAll('[data-acc="accSemantic"]').forEach(h => {
+      const wrap = h.closest('.acc');
+      if (wrap) wrap.style.setProperty('display','none','important');
+    });
+  };
   kill();
   setTimeout(kill, 500);
   setTimeout(kill, 2000);
