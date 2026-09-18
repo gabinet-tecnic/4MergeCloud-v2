@@ -7974,9 +7974,77 @@ try {
   const killIds = ['aiDetectRow', 'btnPickExport', 'apiKeyRow', 'cmdLine', 'segIABlock'];
   const kill = () => killIds.forEach(id => { const el = document.getElementById(id); if (el) { el.style.setProperty('display','none','important'); } });
   kill();
-  // Repeteix al cap de 500ms per si algun altre codi el torna a mostrar
   setTimeout(kill, 500);
   setTimeout(kill, 2000);
+} catch (_) {}
+
+// Si per cache l'HTML no porta encara el botó "🤖 IA" ni el panell, els injectem via JS
+try {
+  const ensureAI = () => {
+    // Botó al menú superior, just abans de tbDiag
+    let btn = document.getElementById('tbAI');
+    const diagBtn = document.getElementById('tbDiag');
+    if (!btn && diagBtn && diagBtn.parentNode) {
+      btn = document.createElement('button');
+      btn.id = 'tbAI';
+      btn.className = diagBtn.className || 'tb-btn';
+      btn.title = 'Detecció d\'objectes amb IA';
+      btn.textContent = '🤖 IA';
+      diagBtn.parentNode.insertBefore(btn, diagBtn);
+    }
+    // Panell flotant
+    let panel = document.getElementById('aiPanel');
+    if (!panel) {
+      panel = document.createElement('div');
+      panel.id = 'aiPanel';
+      panel.style.cssText = 'display:none;position:fixed;top:70px;right:16px;width:340px;background:#0f1119;border:1px solid #2a2d40;border-radius:10px;padding:16px;z-index:9998;box-shadow:0 8px 30px rgba(0,0,0,.5);color:#ddd;font:12px sans-serif;';
+      panel.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;"><span style="color:#e0a15e;font-weight:600;font-size:14px;">🤖 Detecció d\'objectes amb IA</span><button id="aiPanelClose" style="background:none;border:none;color:#ccc;font-size:18px;cursor:pointer;">✕</button></div><div style="font-size:11px;color:#999;margin-bottom:8px;">Escriu què vols detectar:</div><input id="aiDetectQuery2" type="text" placeholder="p.ex. llums d\'emergència i detectors de fum" style="width:100%;padding:7px 9px;background:#1a1d2b;color:#fff;border:1px solid #333;border-radius:5px;margin-bottom:8px;box-sizing:border-box;"><button id="aiDetectBtn2" style="width:100%;padding:9px;background:#e07820;color:#fff;font-weight:600;border:none;border-radius:5px;cursor:pointer;">🔍 Detectar i col·locar</button><div style="font-size:10px;color:#666;margin-top:8px;line-height:1.4;">Consell: posa\'t en vista de planta (PL) i acosta la càmera al sostre abans de detectar.</div>';
+      document.body.appendChild(panel);
+    }
+    // Cablejat (sempre, per si els elements han estat creats ara)
+    const b = document.getElementById('tbAI');
+    if (b && !b._wired) {
+      b._wired = true;
+      b.addEventListener('click', () => {
+        const p = document.getElementById('aiPanel');
+        if (p) p.style.display = (p.style.display === 'none' ? 'block' : 'none');
+      });
+    }
+    const c = document.getElementById('aiPanelClose');
+    if (c && !c._wired) {
+      c._wired = true;
+      c.addEventListener('click', () => {
+        const p = document.getElementById('aiPanel');
+        if (p) p.style.display = 'none';
+      });
+    }
+    const d = document.getElementById('aiDetectBtn2');
+    if (d && !d._wired) {
+      d._wired = true;
+      d.addEventListener('click', async () => {
+        const q = document.getElementById('aiDetectQuery2')?.value?.trim();
+        if (!q) { alert('Escriu què vols detectar.'); return; }
+        if (!localStorage.getItem('ai_api_key')) {
+          const k = prompt('Cal una clau API d\'Anthropic:');
+          if (!k) return;
+          localStorage.setItem('ai_api_key', k.trim());
+        }
+        const oldTxt = d.textContent; d.disabled = true; d.textContent = '⏳ Analitzant…';
+        try {
+          if (!_ed2d) { try { await activateEditor?.(); } catch(_) {} }
+          const res = await _semanticVisionEdit(q, 'marcar_cad', null);
+          const msg = (res || 'Fet.') + '\n\nVols veure la imatge enviada a la IA?';
+          if (confirm(msg) && window._lastVisionImage) {
+            const w = window.open('', '_blank');
+            if (w) w.document.write('<title>Imatge IA</title><body style="margin:0;background:#111"><img src="' + window._lastVisionImage + '" style="max-width:100%;display:block;margin:auto"><pre style="color:#ddd;font:12px monospace;white-space:pre-wrap;padding:12px">' + (window._lastVisionResponse || '').replace(/[<&]/g, c=>c==='<'?'&lt;':'&amp;') + '</pre></body>');
+          }
+        } catch (e) { alert('Error IA: ' + e.message); }
+        finally { d.disabled = false; d.textContent = oldTxt; }
+      });
+    }
+  };
+  ensureAI();
+  setTimeout(ensureAI, 1000);
 } catch (_) {}
 try { initGizmo(); } catch(e) { console.error('initGizmo() crashed:', e); }
 try { initActionLogger(); } catch(e) { console.error('initActionLogger() crashed:', e); }
