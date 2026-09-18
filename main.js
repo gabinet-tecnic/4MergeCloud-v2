@@ -7327,6 +7327,49 @@ function initDiagUI() {
     const open = panel.classList.toggle('open');
     if (open) _renderDiag();
   });
+
+  // Mòdul IA independent al menú superior
+  const aiPanel = document.getElementById('aiPanel');
+  document.getElementById('tbAI')?.addEventListener('click', () => {
+    if (!aiPanel) return;
+    aiPanel.style.display = (aiPanel.style.display === 'none') ? 'block' : 'none';
+    if (aiPanel.style.display === 'block') {
+      setTimeout(() => document.getElementById('aiDetectQuery2')?.focus(), 50);
+    }
+  });
+  document.getElementById('aiPanelClose')?.addEventListener('click', () => {
+    if (aiPanel) aiPanel.style.display = 'none';
+  });
+  document.getElementById('aiDetectBtn2')?.addEventListener('click', async () => {
+    const q = document.getElementById('aiDetectQuery2')?.value?.trim();
+    if (!q) { alert('Escriu què vols detectar (p. ex. "llums d\'emergència i detectors de fum").'); return; }
+    if (typeof clouds !== 'undefined' && clouds.length === 0) { alert('Primer carrega un núvol.'); return; }
+    if (!localStorage.getItem('ai_api_key')) {
+      const k = prompt('Cal una clau API d\'Anthropic (comença per "sk-ant-…"). Enganxa-la aquí:');
+      if (!k) return;
+      localStorage.setItem('ai_api_key', k.trim());
+    }
+    const btn = document.getElementById('aiDetectBtn2');
+    const oldTxt = btn.textContent;
+    btn.disabled = true; btn.textContent = '⏳ Analitzant…';
+    try {
+      // Assegura't que l'editor2d està actiu perquè hi puguem col·locar shapes
+      if (!_ed2d) { try { await activateEditor?.(); } catch (_) {} }
+      const res = await _semanticVisionEdit(q, 'marcar_cad', null);
+      const msg = (res || 'Fet.') + '\n\n¿ Vols veure la imatge que s\'ha enviat a la IA (per comprovar què veu) ?';
+      if (confirm(msg) && window._lastVisionImage) {
+        const w = window.open('', '_blank');
+        if (w) {
+          w.document.write('<title>Imatge enviada a la IA</title><body style="margin:0;background:#111"><img src="' + window._lastVisionImage + '" style="max-width:100%;display:block;margin:auto"><pre style="color:#ddd;font:12px monospace;white-space:pre-wrap;padding:12px">' + (window._lastVisionResponse || '').replace(/[<&]/g, c=>c==='<'?'&lt;':'&amp;') + '</pre></body>');
+        }
+      }
+    } catch (e) {
+      alert('Error IA: ' + e.message);
+    } finally {
+      btn.disabled = false; btn.textContent = oldTxt;
+    }
+  });
+
   document.getElementById('diagClose')?.addEventListener('click', () => panel?.classList.remove('open'));
   document.getElementById('diagClear')?.addEventListener('click', () => { _diagLog.length = 0; diag('registre netejat'); _renderDiag(); });
   document.getElementById('diagHeal')?.addEventListener('click', (e) => {
@@ -7401,33 +7444,7 @@ function _wireEditorButtons(ed) {
   document.getElementById('edModeLineClick')?.addEventListener('click', () => { ed.setMode('line-click'); _edSetModeBtn('line-click'); });
   document.getElementById('edModeRect')?.addEventListener('click', () => { ed.setMode('rect'); _edSetModeBtn('rect'); });
   document.getElementById('edModeCircle')?.addEventListener('click', () => { ed.setMode('circle'); _edSetModeBtn('circle'); });
-  // Detecció d'objectes amb IA (Claude Vision) → col·loca marcadors al dibuix
-  document.getElementById('aiDetectBtn')?.addEventListener('click', async () => {
-    const q = document.getElementById('aiDetectQuery')?.value?.trim();
-    if (!q) { alert('Escriu què vols detectar (p. ex. "llums d\'emergència i detectors de fum").'); return; }
-    if (!localStorage.getItem('ai_api_key')) {
-      const k = prompt('Cal una clau API d\'Anthropic (comença per "sk-ant-…"). Enganxa-la aquí:');
-      if (!k) return;
-      localStorage.setItem('ai_api_key', k.trim());
-    }
-    const btn = document.getElementById('aiDetectBtn');
-    const oldTxt = btn.textContent;
-    btn.disabled = true; btn.textContent = '⏳ Analitzant…';
-    try {
-      const res = await _semanticVisionEdit(q, 'marcar_cad', null);
-      const msg = (res || 'Fet.') + '\n\nVols veure la imatge que s\'ha enviat a la IA (per comprovar què veu)?';
-      if (confirm(msg) && window._lastVisionImage) {
-        const w = window.open('', '_blank');
-        if (w) {
-          w.document.write('<title>Imatge enviada a la IA</title><body style="margin:0;background:#111"><img src="' + window._lastVisionImage + '" style="max-width:100%;display:block;margin:auto"><pre style="color:#ddd;font:12px monospace;white-space:pre-wrap;padding:12px">' + (window._lastVisionResponse || '').replace(/[<&]/g, c=>c==='<'?'&lt;':'&amp;') + '</pre></body>');
-        }
-      }
-    } catch (e) {
-      alert('Error: ' + e.message);
-    } finally {
-      btn.disabled = false; btn.textContent = oldTxt;
-    }
-  });
+  // (Botó IA antic mogut al menú superior; el mantenim aquí sense fer res per si torna a aparèixer)
   document.getElementById('edModeEdit').onclick  = () => { ed.setMode('edit'); _edSetModeBtn('edit'); };
   document.getElementById('edModeErase').onclick = () => { ed.setMode('erase'); _edSetModeBtn('erase'); };
   document.getElementById('edModeThick').onclick = () => { ed.setMode('thickness'); _edSetModeBtn('thickness'); };
