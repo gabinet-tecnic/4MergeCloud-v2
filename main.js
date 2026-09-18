@@ -7967,6 +7967,17 @@ try { initCmdLine(); } catch(e) { console.error('initCmdLine() crashed:', e); }
 try { initEditor2DUI(); } catch(e) { console.error('initEditor2DUI() crashed:', e); }
 try { initTopUI(); } catch(e) { console.error('initTopUI() crashed:', e); }
 try { initDiagUI(); } catch(e) { console.error('initDiagUI() crashed:', e); }
+
+// Neteja runtime dels blocs IA que puguin haver quedat al DOM si l'HTML està cachejat.
+// L'IA té el seu botó "🤖 IA" propi al menú superior — la resta ha de quedar amagada.
+try {
+  const killIds = ['aiDetectRow', 'btnPickExport', 'apiKeyRow', 'cmdLine', 'segIABlock'];
+  const kill = () => killIds.forEach(id => { const el = document.getElementById(id); if (el) { el.style.setProperty('display','none','important'); } });
+  kill();
+  // Repeteix al cap de 500ms per si algun altre codi el torna a mostrar
+  setTimeout(kill, 500);
+  setTimeout(kill, 2000);
+} catch (_) {}
 try { initGizmo(); } catch(e) { console.error('initGizmo() crashed:', e); }
 try { initActionLogger(); } catch(e) { console.error('initActionLogger() crashed:', e); }
 try { _translateUI(); } catch(e) { console.error('_translateUI() crashed:', e); }
