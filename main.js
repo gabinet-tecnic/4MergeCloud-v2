@@ -7444,6 +7444,7 @@ function _wireEditorButtons(ed) {
   document.getElementById('edModeLineClick')?.addEventListener('click', () => { ed.setMode('line-click'); _edSetModeBtn('line-click'); });
   document.getElementById('edModeRect')?.addEventListener('click', () => { ed.setMode('rect'); _edSetModeBtn('rect'); });
   document.getElementById('edModeCircle')?.addEventListener('click', () => { ed.setMode('circle'); _edSetModeBtn('circle'); });
+  document.getElementById('edModeCopyShape')?.addEventListener('click', () => { ed.setMode('copy-shape'); _edSetModeBtn('copy-shape'); });
   // (Botó IA antic mogut al menú superior; el mantenim aquí sense fer res per si torna a aparèixer)
   document.getElementById('edModeEdit').onclick  = () => { ed.setMode('edit'); _edSetModeBtn('edit'); };
   document.getElementById('edModeErase').onclick = () => { ed.setMode('erase'); _edSetModeBtn('erase'); };

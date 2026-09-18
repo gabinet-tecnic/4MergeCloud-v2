@@ -57,6 +57,8 @@ export function createEditor2D(ctx) {
   // ── Formes clic-clic (línia, rectangle, cercle) ──
   let shapes      = [];       // {id, type: 'line'|'rect'|'circle', a: {x,y,z}, b: {x,y,z}}
   let shapeAnchor = null;     // punt món del 1r clic mentre s'està col·locant una forma
+  let copySource  = null;     // forma seleccionada per copiar (mode 'copy-shape')
+  let copyAnchor  = null;     // punt món del 1r clic quan s'ha seleccionat el font
   let sid         = 1;
   const SHAPE_COL = 0xffb84d;
   const SHAPE_PX  = 14;
@@ -620,6 +622,12 @@ export function createEditor2D(ctx) {
         removePreview();
         return;
       }
+      if (mode === 'copy-shape') {
+        e.preventDefault(); e.stopImmediatePropagation();
+        copySource = null; copyAnchor = null;
+        removePreview();
+        return;
+      }
       return;   // altres modes: deixa passar (o no fem res)
     }
     e.preventDefault();
@@ -653,6 +661,31 @@ export function createEditor2D(ctx) {
       const n = nodeAtScreen(cx, cy, SNAP_PX);
       dragId = n ? n.id : null;
       if (n) { try { el().setPointerCapture(e.pointerId); } catch (_) {} }
+      return;
+    }
+
+    if (mode === 'copy-shape') {
+      const w = ctx.screenToWorld(cx, cy);
+      if (!w) return;
+      const pa = _planeAxes();
+      const p = { x: w.x, y: w.y, z: w.z };
+      if (pa.w === 'y') { if (planeY == null) planeY = w.y; p.y = planeY; }
+      else { p[pa.w] = 0; }
+      if (!copySource) {
+        // 1r clic: intenta agafar una forma sota el cursor com a font
+        const sh = shapeAtScreen(cx, cy, SHAPE_PX);
+        if (!sh) return;
+        copySource = sh;
+        copyAnchor = p;
+        return;
+      }
+      // 2n clic i posteriors: crea una còpia translació (p - copyAnchor)
+      const dx = p.x - copyAnchor.x, dy = p.y - copyAnchor.y, dz = p.z - copyAnchor.z;
+      const na = { x: copySource.a.x + dx, y: copySource.a.y + dy, z: copySource.a.z + dz };
+      const nb = { x: copySource.b.x + dx, y: copySource.b.y + dy, z: copySource.b.z + dz };
+      shapes.push({ id: sid++, type: copySource.type, a: na, b: nb, label: copySource.label || null });
+      removePreview();
+      rebuild(); changed();
       return;
     }
 
@@ -824,6 +857,20 @@ export function createEditor2D(ctx) {
       const p = { x: w.x, y: w.y, z: w.z };
       if (pa.w === 'y' && planeY != null) p.y = planeY; else p[pa.w] = 0;
       updateShapePreview(mode === 'line-click' ? 'line' : mode, shapeAnchor, p);
+      return;
+    }
+
+    // Preview per a l'eina de copiar: mostra la forma font translada al cursor
+    if (mode === 'copy-shape' && copySource && copyAnchor) {
+      const w = ctx.screenToWorld(cx, cy);
+      if (!w) return;
+      const pa = _planeAxes();
+      const p = { x: w.x, y: w.y, z: w.z };
+      if (pa.w === 'y' && planeY != null) p.y = planeY; else p[pa.w] = 0;
+      const dx = p.x - copyAnchor.x, dy = p.y - copyAnchor.y, dz = p.z - copyAnchor.z;
+      const na = { x: copySource.a.x + dx, y: copySource.a.y + dy, z: copySource.a.z + dz };
+      const nb = { x: copySource.b.x + dx, y: copySource.b.y + dy, z: copySource.b.z + dz };
+      updateShapePreview(copySource.type, na, nb);
       return;
     }
 
@@ -1079,6 +1126,7 @@ export function createEditor2D(ctx) {
     setMode(m) {
       mode = m; drawing = false; freePts = []; hoverId = null;
       shapeAnchor = null;
+      copySource = null; copyAnchor = null;
       removePreview();
       if (m !== 'thickness') { selWall = null; measuring = false; measurePts = []; }      if (m !== 'select') { selSet.clear(); }
       boxStart = null; boxNow = null; hideSelBox();
