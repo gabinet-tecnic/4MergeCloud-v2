@@ -616,19 +616,18 @@ export function createEditor2D(ctx) {
     if (e.pointerType === 'touch') return;
     // Botó dret (button === 2): a les eines de clic-clic surt/reinicia i no fa res més.
     if (e.button === 2) {
+      // El botó dret cancel·la l'ancoratge de les eines de clic-clic i copiar,
+      // però NO bloquem l'esdeveniment: així OrbitControls encara pot fer pan
+      // amb el mateix botó dret (drag). El menú contextual del navegador es
+      // suprimeix al handler 'contextmenu' de sota.
       if (mode === 'line-click' || mode === 'rect' || mode === 'circle') {
-        e.preventDefault(); e.stopImmediatePropagation();
         shapeAnchor = null;
         removePreview();
-        return;
-      }
-      if (mode === 'copy-shape') {
-        e.preventDefault(); e.stopImmediatePropagation();
+      } else if (mode === 'copy-shape') {
         copySource = null; copyAnchor = null;
         removePreview();
-        return;
       }
-      return;   // altres modes: deixa passar (o no fem res)
+      return;   // deixa passar l'esdeveniment perquè OrbitControls faci pan
     }
     e.preventDefault();
     e.stopImmediatePropagation();
@@ -1013,12 +1012,11 @@ export function createEditor2D(ctx) {
   el().addEventListener('pointerdown', onDown, { capture: true });
   el().addEventListener('pointermove', onMove, { capture: true });
   el().addEventListener('pointerup',   onUp,   { capture: true });
-  // El botó dret ha de sortir de l'eina de clic-clic sense obrir el menú del navegador.
+  // El botó dret pana la vista; suprimeix el menú del navegador en tots els
+  // modes de l'editor perquè no aparegui damunt del pan.
   el().addEventListener('contextmenu', (e) => {
     if (!active) return;
-    if (mode === 'line-click' || mode === 'rect' || mode === 'circle') {
-      e.preventDefault();
-    }
+    e.preventDefault();
   });
   window.addEventListener('keydown', onKey);
 
