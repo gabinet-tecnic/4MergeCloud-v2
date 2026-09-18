@@ -652,7 +652,22 @@
       <button class="lang-btn" data-lang="ca">CAT</button>
       <button class="lang-btn" data-lang="en">ENG</button>
     </div>
+    <button id="tbAI" class="tb-btn" title="Detecció d'objectes amb IA">🤖 IA</button>
     <button id="tbDiag" class="tb-btn" title="Registre de diagnòstic">Diagnòstic</button>
+  </div>
+
+  <!-- Panell IA (independent del NÚVOL/DIBUIX) -->
+  <div id="aiPanel" style="display:none; position:fixed; top:70px; right:16px; width:340px; background:#0f1119; border:1px solid #2a2d40; border-radius:10px; padding:16px; z-index:9998; box-shadow:0 8px 30px rgba(0,0,0,.5);">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+      <span style="color:#e0a15e; font-weight:600; font-size:14px;">🤖 Detecció d'objectes amb IA</span>
+      <button id="aiPanelClose" style="background:none; border:none; color:#ccc; font-size:18px; cursor:pointer;">✕</button>
+    </div>
+    <div style="font-size:11px; color:#999; margin-bottom:8px;">Escriu què vols detectar (sostre / paret / terra):</div>
+    <input id="aiDetectQuery2" type="text" placeholder="p.ex. llums d'emergència i detectors de fum" style="width:100%; padding:7px 9px; background:#1a1d2b; color:#fff; border:1px solid #333; border-radius:5px; margin-bottom:8px;">
+    <button id="aiDetectBtn2" style="width:100%; padding:9px; background:#e07820; color:#fff; font-weight:600; border:none; border-radius:5px; cursor:pointer;">🔍 Detectar i col·locar</button>
+    <div style="font-size:10px; color:#666; margin-top:8px; line-height:1.4;">
+      Consell: posa't en vista de planta (PL) i acosta la càmera al sostre abans de detectar.
+    </div>
   </div>
 
   <!-- Panell de diagnòstic (caixa negra) -->
@@ -827,7 +842,7 @@
       </div>
 
       <!-- SELECCIÓ (LLAÇ) — 2D → frustum 3D → punts ressaltats + export IA -->
-      <div class="acc">
+      <div class="acc" id="accPickWrap">
         <div class="acc-header" data-acc="accPick">
           <span><span class="acc-icon">&#9678;</span>Selecció (llaç)</span>
           <span class="acc-arrow">&#9654;</span>
@@ -1008,11 +1023,7 @@
           <button id="edModeRect" class="ed-mode">&#9633; Rectangle</button>
           <button id="edModeCircle" class="ed-mode">&#9711; Cercle</button>
         </div>
-        <div class="ed-modes" id="aiDetectRow" style="flex-direction:column;gap:6px;padding:6px 4px;border:1px solid #2a2d40;border-radius:6px;background:#0f1119">
-          <div style="color:#e0a15e;font-size:11px;font-weight:600">🤖 Detectar objectes amb IA</div>
-          <input id="aiDetectQuery" type="text" placeholder="p.ex. llums d'emergència i detectors de fum" style="padding:6px 8px;font-size:12px;background:#1a1d28;color:#d6deea;border:1px solid #2a3145;border-radius:5px">
-          <button id="aiDetectBtn" class="ed-mode" style="background:#e07820;color:#fff;font-weight:600">🔍 Detectar i col·locar</button>
-        </div>
+        <!-- (Bloc IA mogut al menú superior, botó "🤖 IA") -->
         <div class="ed-modes">
           <button id="edModeEdit" class="ed-mode">&#10021; Editar</button>
           <button id="edModeErase" class="ed-mode">&#10005; Esborrar</button>
@@ -1283,6 +1294,12 @@
         #cmdLine { display: none !important; }
         /* Segmentació IA (client heurístic + panell de dataset) */
         #segIABlock { display: none !important; }
+        /* Bloc de detecció IA al DIBUIX — mogut al botó del menú superior "🤖 IA" */
+        #aiDetectRow { display: none !important; }
+        /* Copiar per a IA (JSON) al llaç — dintre de la secció IA que treballarem a part */
+        #btnPickExport { display: none !important; }
+        /* Selecció (llaç) sencera — alimenta la IA i inclou "Reparar Superfície" (RANSAC) */
+        #accPickWrap { display: none !important; }
       </style>
       <div id="cmdHistory"></div>
       <div id="cmdInputRow">
@@ -1312,7 +1329,7 @@
   <script src="https://apis.google.com/js/api.js" async defer></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script src="drive.js"></script>
-  <script type="module" src="main.js"></script>
+  <script type="module" src="main.js?v=2026091804"></script>
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {

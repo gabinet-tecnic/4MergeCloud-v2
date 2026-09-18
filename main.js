@@ -800,10 +800,18 @@ async function attachMergedMeshFromGlbs(cloud) {
       if (mv) {
         const wm = new THREE.Matrix4();
         if (Array.isArray(matArr) && matArr.length === 16) wm.fromArray(matArr);
+        else if (matArr && matArr.elements) wm.copy(matArr);
+        // Cal actualitzar les matrius de món de la jerarquia acabada de crear
+        // per poder combinar la matriu local de cada malla amb la matriu del
+        // núvol origen en el moment de la fusió (evita mala alineació / triangles
+        // fragmentats en recuperar un projecte unit).
+        rebuilt.updateMatrixWorld(true);
         mv.traverse(o => {
           if (o.isMesh && o.geometry) {
+            o.updateMatrixWorld(true);
             const g = o.geometry.clone();
-            g.applyMatrix4(wm);
+            const combined = new THREE.Matrix4().multiplyMatrices(wm, o.matrixWorld);
+            g.applyMatrix4(combined);
             const src = o.material || {};
             const hasVCol = !!src.vertexColors && !!g.getAttribute('color');
             const baseCol = src.color?.clone?.() || new THREE.Color(0xffffff);
@@ -1116,6 +1124,8 @@ function init() {
 
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0x0e1117);
+  // Exposició per a depuració des de la consola del navegador
+  try { window.__mc = { scene, clouds, THREE, get camera(){return camera;}, get renderer(){return renderer;} }; } catch (_) {}
   scene.add(new THREE.AxesHelper(1));
 
   camera = new THREE.PerspectiveCamera(60, width / height, 0.01, 1e7);
@@ -6325,30 +6335,62 @@ function _buildProjectData() {
   };
 }
 // Retorna el projecte serialitzat com a Blob + nom suggerit — útil per pujar-lo a Drive.
-window.buildProjectBlob = function () {
-  if (clouds.length === 0 && !(_ed2d && _ed2d.count().walls)) { alert('No hi ha res per desar encara. Carrega un núvol o dibuixa una planta.'); return null; }
+// Intenta serialitzar el projecte incloent tots els bytes originals. Si el
+// resultat supera el límit de longitud de cadena (uns 512 MB a V8), fa una
+// segona passada sense els bytes grans (només punts + malla no es podrà
+// reconstruir del GLB/FBX en obrir-lo). Retorna { data, blob, degraded }.
+function _serializeProjectSafely() {
+  // 1) Intent complet
   try {
     const data = _buildProjectData();
     const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+    return { data, blob, degraded: false };
+  } catch (e1) {
+    diag('⚠ desat complet fallat: ' + e1.message + ' → provo sense bytes originals');
+    // 2) Intent lleuger: sense glb/fbx/glbList originals (les malles no es
+    // podran reconstruir del GLB/FBX, però el núvol i el dibuix es desen bé)
+    try {
+      const s = _collectSession(false);
+      const data = { format:'4mc-project', version:1, t: s.t,
+        clouds: s.clouds.map(c => ({
+          name:c.name, visible:c.visible, matrix:c.matrix, size:c.size,
+          pos: _f32ToB64(c.pos), col: c.col ? _f32ToB64(c.col) : null,
+          glb:null, fbx:null, glbList:null,
+        })),
+        drawing: s.drawing,
+      };
+      const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+      return { data, blob, degraded: true };
+    } catch (e2) {
+      throw new Error('massa gran fins i tot sense malla: ' + e2.message);
+    }
+  }
+}
+
+window.buildProjectBlob = function () {
+  if (clouds.length === 0 && !(_ed2d && _ed2d.count().walls)) { alert('No hi ha res per desar encara. Carrega un núvol o dibuixa una planta.'); return null; }
+  try {
+    const { blob, degraded } = _serializeProjectSafely();
+    if (degraded) alert('El projecte és massa gran per desar la malla dins el .4mc.\nEs desarà només el núvol de punts i el dibuix. Al reobrir-lo no podràs canviar a vista Malla.');
     const name = 'projecte_' + new Date().toISOString().slice(0, 10) + '.4mc';
     return { blob, name };
   } catch (e) {
     diag('⚠ error serialitzant projecte: ' + e.message);
-    alert('No s\'ha pogut serialitzar el projecte (probablement massa gran): ' + e.message);
+    alert('No s\'ha pogut serialitzar el projecte: ' + e.message);
     return null;
   }
 };
 function saveProject() {
   if (clouds.length === 0 && !(_ed2d && _ed2d.count().walls)) { alert('No hi ha res per desar encara. Carrega un núvol o dibuixa una planta.'); return; }
-  let data, blob;
+  let data, blob, degraded;
   try {
-    data = _buildProjectData();
-    blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+    ({ data, blob, degraded } = _serializeProjectSafely());
   } catch (e) {
     diag('⚠ error serialitzant projecte: ' + e.message);
-    alert('No s\'ha pogut desar el projecte (probablement massa gran per fer un .4mc): ' + e.message);
+    alert('No s\'ha pogut desar el projecte: ' + e.message);
     return;
   }
+  if (degraded) alert('El projecte és massa gran per desar la malla dins el .4mc.\nEs desarà només el núvol de punts i el dibuix. Al reobrir-lo no podràs canviar a vista Malla.');
   try {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -6414,10 +6456,26 @@ function onMouseWheel(event) {
 // ─────────────────────────────────────────────
 
 function _captureSceneImage() {
-  // Renderitza la vista de planta i retorna base64 JPEG
+  // Renderitza a alta resolució per capturar detalls petits (llums, detectors…)
   const cam = (useOrtho && orthoCamera) ? orthoCamera : camera;
+  const prevSize = renderer.getSize(new THREE.Vector2());
+  const prevPR = renderer.getPixelRatio();
+  // Puja a ~2048px pel costat més gran mantenint la relació
+  const maxSide = 2048;
+  const scale = Math.min(maxSide / Math.max(prevSize.x, prevSize.y), 3);
+  if (scale > 1.01) {
+    renderer.setPixelRatio(1);
+    renderer.setSize(Math.round(prevSize.x * scale), Math.round(prevSize.y * scale), false);
+  }
   renderer.render(scene, cam);
-  return renderer.domElement.toDataURL('image/jpeg', 0.85).split(',')[1];
+  const data = renderer.domElement.toDataURL('image/jpeg', 0.95).split(',')[1];
+  if (scale > 1.01) {
+    renderer.setPixelRatio(prevPR);
+    renderer.setSize(prevSize.x, prevSize.y, false);
+    renderer.render(scene, cam);
+  }
+  try { window._lastVisionImage = 'data:image/jpeg;base64,' + data; } catch (_) {}
+  return data;
 }
 
 function _cloudWorldBBox() {
@@ -6539,17 +6597,29 @@ async function _semanticVisionEdit(query, operacio, colorHex) {
   const bbox  = _cloudWorldBBox();
   if (!bbox) return 'No s\'ha pogut calcular els límits del núvol.';
 
-  const sysPrompt = `Ets un expert en interpretació visual de núvols de punts 3D (vista de planta).
-Analitza la imatge i localitza els objectes demanats.
-Retorna ÚNICAMENT un JSON vàlid, sense text addicional:
+  const sysPrompt = `Ets un expert en interpretar núvols de punts 3D d'escaneigs d'interiors, VISTA DE PLANTA (des de dalt cap avall, mirant el sostre o el terra).
+La imatge és un núvol de punts real, no una foto: pot tenir soroll, buits, i colors atenuats.
+
+Objectes típics de sostre a detectar (aparences habituals a la vista de planta):
+- Llums d'emergència: rectangles allargats petits, sovint blancs/grisos/taronges (10–40 cm de llarg).
+- Detectors de fum: cercles o discos petits (~10–15 cm de diàmetre), sovint blancs, sortint del pla del sostre.
+- Detectors de moviment: rectangles/cubs petits als angles o parets.
+- Focus/downlights: cercles regulars al pla del sostre.
+- Sortides/reixes AC: rectangles llargs amb textura ratllada.
+- Alarmes/sirenes: rectangles vermells/blancs.
+
+INSPECCIONA la imatge amb detall: cerca formes petites, canvis de color subtils, discontinuïtats geomètriques. NO omitis objectes petits: sovint són els més importants.
+
+Retorna ÚNICAMENT un JSON vàlid, sense text addicional ni markdown:
 {
   "objectes": [
-    {"tipus": "nom_objecte", "bbox_norm": {"x1":0.0,"z1":0.0,"x2":1.0,"z2":1.0}}
+    {"tipus": "nom_objecte_curt", "bbox_norm": {"x1":0.0,"z1":0.0,"x2":1.0,"z2":1.0}, "confianca": 0.0}
   ],
-  "resposta": "text breu explicatiu"
+  "resposta": "text breu explicatiu (què has vist i quants)"
 }
-Les coordenades bbox_norm van de 0.0 (esquerra/dalt) a 1.0 (dreta/baix) en la imatge.
-Si no trobes els objectes, retorna objectes=[].`;
+bbox_norm: x1/x2 horitzontal, z1/z2 vertical (0=dalt/esquerra, 1=baix/dreta) — SEMPRE respecte la imatge sencera.
+Ajusta la caixa ben ajustada a cada objecte (no facis caixes gegants).
+Si dubtes, inclou l'objecte amb confianca<0.5. Si REALMENT no veus res, retorna objectes=[] i explica què hi ha a la imatge.`;
 
   const resp = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -6580,15 +6650,19 @@ Si no trobes els objectes, retorna objectes=[].`;
 
   const data = await resp.json();
   const raw  = data.content?.[0]?.text || '';
+  try { window._lastVisionResponse = raw; } catch (_) {}
+  _cmdLog('📝 Resposta IA: ' + raw.slice(0, 500), 'cmd-sys');
   const jsonMatch = raw.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) return 'La IA no ha retornat un format vàlid.';
+  if (!jsonMatch) return 'La IA no ha retornat un format vàlid. Resposta: ' + raw.slice(0, 200);
 
   let parsed;
   try { parsed = JSON.parse(jsonMatch[0]); }
-  catch { return 'Error parsejant la resposta de la IA.'; }
+  catch { return 'Error parsejant la resposta de la IA. Resposta: ' + raw.slice(0, 200); }
 
-  if (!parsed.objectes || parsed.objectes.length === 0)
-    return `No s'han trobat objectes del tipus "${query}" a la vista actual.`;
+  if (!parsed.objectes || parsed.objectes.length === 0) {
+    const expl = parsed.resposta ? ' — ' + parsed.resposta : '';
+    return `No s'han trobat objectes del tipus "${query}" a la vista actual.${expl}\n\nProva: vista de planta ben enquadrada, zoom al sostre, i escriu la consulta en singular i concret (p.ex. "llum d'emergència rectangular petita blanca").`;
+  }
 
   // Converteix coordenades normalitzades → coordenades món
   const rangeX = bbox.max.x - bbox.min.x;
@@ -7253,6 +7327,49 @@ function initDiagUI() {
     const open = panel.classList.toggle('open');
     if (open) _renderDiag();
   });
+
+  // Mòdul IA independent al menú superior
+  const aiPanel = document.getElementById('aiPanel');
+  document.getElementById('tbAI')?.addEventListener('click', () => {
+    if (!aiPanel) return;
+    aiPanel.style.display = (aiPanel.style.display === 'none') ? 'block' : 'none';
+    if (aiPanel.style.display === 'block') {
+      setTimeout(() => document.getElementById('aiDetectQuery2')?.focus(), 50);
+    }
+  });
+  document.getElementById('aiPanelClose')?.addEventListener('click', () => {
+    if (aiPanel) aiPanel.style.display = 'none';
+  });
+  document.getElementById('aiDetectBtn2')?.addEventListener('click', async () => {
+    const q = document.getElementById('aiDetectQuery2')?.value?.trim();
+    if (!q) { alert('Escriu què vols detectar (p. ex. "llums d\'emergència i detectors de fum").'); return; }
+    if (typeof clouds !== 'undefined' && clouds.length === 0) { alert('Primer carrega un núvol.'); return; }
+    if (!localStorage.getItem('ai_api_key')) {
+      const k = prompt('Cal una clau API d\'Anthropic (comença per "sk-ant-…"). Enganxa-la aquí:');
+      if (!k) return;
+      localStorage.setItem('ai_api_key', k.trim());
+    }
+    const btn = document.getElementById('aiDetectBtn2');
+    const oldTxt = btn.textContent;
+    btn.disabled = true; btn.textContent = '⏳ Analitzant…';
+    try {
+      // Assegura't que l'editor2d està actiu perquè hi puguem col·locar shapes
+      if (!_ed2d) { try { await activateEditor?.(); } catch (_) {} }
+      const res = await _semanticVisionEdit(q, 'marcar_cad', null);
+      const msg = (res || 'Fet.') + '\n\n¿ Vols veure la imatge que s\'ha enviat a la IA (per comprovar què veu) ?';
+      if (confirm(msg) && window._lastVisionImage) {
+        const w = window.open('', '_blank');
+        if (w) {
+          w.document.write('<title>Imatge enviada a la IA</title><body style="margin:0;background:#111"><img src="' + window._lastVisionImage + '" style="max-width:100%;display:block;margin:auto"><pre style="color:#ddd;font:12px monospace;white-space:pre-wrap;padding:12px">' + (window._lastVisionResponse || '').replace(/[<&]/g, c=>c==='<'?'&lt;':'&amp;') + '</pre></body>');
+        }
+      }
+    } catch (e) {
+      alert('Error IA: ' + e.message);
+    } finally {
+      btn.disabled = false; btn.textContent = oldTxt;
+    }
+  });
+
   document.getElementById('diagClose')?.addEventListener('click', () => panel?.classList.remove('open'));
   document.getElementById('diagClear')?.addEventListener('click', () => { _diagLog.length = 0; diag('registre netejat'); _renderDiag(); });
   document.getElementById('diagHeal')?.addEventListener('click', (e) => {
@@ -7327,27 +7444,7 @@ function _wireEditorButtons(ed) {
   document.getElementById('edModeLineClick')?.addEventListener('click', () => { ed.setMode('line-click'); _edSetModeBtn('line-click'); });
   document.getElementById('edModeRect')?.addEventListener('click', () => { ed.setMode('rect'); _edSetModeBtn('rect'); });
   document.getElementById('edModeCircle')?.addEventListener('click', () => { ed.setMode('circle'); _edSetModeBtn('circle'); });
-  // Detecció d'objectes amb IA (Claude Vision) → col·loca marcadors al dibuix
-  document.getElementById('aiDetectBtn')?.addEventListener('click', async () => {
-    const q = document.getElementById('aiDetectQuery')?.value?.trim();
-    if (!q) { alert('Escriu què vols detectar (p. ex. "llums d\'emergència i detectors de fum").'); return; }
-    if (!localStorage.getItem('ai_api_key')) {
-      const k = prompt('Cal una clau API d\'Anthropic (comença per "sk-ant-…"). Enganxa-la aquí:');
-      if (!k) return;
-      localStorage.setItem('ai_api_key', k.trim());
-    }
-    const btn = document.getElementById('aiDetectBtn');
-    const oldTxt = btn.textContent;
-    btn.disabled = true; btn.textContent = '⏳ Analitzant…';
-    try {
-      const res = await _semanticVisionEdit(q, 'marcar_cad', null);
-      alert(res || 'Fet.');
-    } catch (e) {
-      alert('Error: ' + e.message);
-    } finally {
-      btn.disabled = false; btn.textContent = oldTxt;
-    }
-  });
+  // (Botó IA antic mogut al menú superior; el mantenim aquí sense fer res per si torna a aparèixer)
   document.getElementById('edModeEdit').onclick  = () => { ed.setMode('edit'); _edSetModeBtn('edit'); };
   document.getElementById('edModeErase').onclick = () => { ed.setMode('erase'); _edSetModeBtn('erase'); };
   document.getElementById('edModeThick').onclick = () => { ed.setMode('thickness'); _edSetModeBtn('thickness'); };
@@ -7870,6 +7967,97 @@ try { initCmdLine(); } catch(e) { console.error('initCmdLine() crashed:', e); }
 try { initEditor2DUI(); } catch(e) { console.error('initEditor2DUI() crashed:', e); }
 try { initTopUI(); } catch(e) { console.error('initTopUI() crashed:', e); }
 try { initDiagUI(); } catch(e) { console.error('initDiagUI() crashed:', e); }
+
+// Neteja runtime dels blocs IA que puguin haver quedat al DOM si l'HTML està cachejat.
+// L'IA té el seu botó "🤖 IA" propi al menú superior — la resta ha de quedar amagada.
+try {
+  const killIds = ['aiDetectRow', 'btnPickExport', 'apiKeyRow', 'cmdLine', 'segIABlock', 'accPickWrap'];
+  const kill = () => {
+    killIds.forEach(id => { const el = document.getElementById(id); if (el) el.style.setProperty('display','none','important'); });
+    // Fallback: amaga el bloc "Selecció (llaç)" trobant-lo pel data-acc de l'accordió
+    document.querySelectorAll('[data-acc="accPick"]').forEach(h => {
+      const wrap = h.closest('.acc');
+      if (wrap) wrap.style.setProperty('display','none','important');
+    });
+    // Fallback: amaga per data-acc="accSemantic" (segmentació semàntica IA)
+    document.querySelectorAll('[data-acc="accSemantic"]').forEach(h => {
+      const wrap = h.closest('.acc');
+      if (wrap) wrap.style.setProperty('display','none','important');
+    });
+  };
+  kill();
+  setTimeout(kill, 500);
+  setTimeout(kill, 2000);
+} catch (_) {}
+
+// Si per cache l'HTML no porta encara el botó "🤖 IA" ni el panell, els injectem via JS
+try {
+  const ensureAI = () => {
+    // Botó al menú superior, just abans de tbDiag
+    let btn = document.getElementById('tbAI');
+    const diagBtn = document.getElementById('tbDiag');
+    if (!btn && diagBtn && diagBtn.parentNode) {
+      btn = document.createElement('button');
+      btn.id = 'tbAI';
+      btn.className = diagBtn.className || 'tb-btn';
+      btn.title = 'Detecció d\'objectes amb IA';
+      btn.textContent = '🤖 IA';
+      diagBtn.parentNode.insertBefore(btn, diagBtn);
+    }
+    // Panell flotant
+    let panel = document.getElementById('aiPanel');
+    if (!panel) {
+      panel = document.createElement('div');
+      panel.id = 'aiPanel';
+      panel.style.cssText = 'display:none;position:fixed;top:70px;right:16px;width:340px;background:#0f1119;border:1px solid #2a2d40;border-radius:10px;padding:16px;z-index:9998;box-shadow:0 8px 30px rgba(0,0,0,.5);color:#ddd;font:12px sans-serif;';
+      panel.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;"><span style="color:#e0a15e;font-weight:600;font-size:14px;">🤖 Detecció d\'objectes amb IA</span><button id="aiPanelClose" style="background:none;border:none;color:#ccc;font-size:18px;cursor:pointer;">✕</button></div><div style="font-size:11px;color:#999;margin-bottom:8px;">Escriu què vols detectar:</div><input id="aiDetectQuery2" type="text" placeholder="p.ex. llums d\'emergència i detectors de fum" style="width:100%;padding:7px 9px;background:#1a1d2b;color:#fff;border:1px solid #333;border-radius:5px;margin-bottom:8px;box-sizing:border-box;"><button id="aiDetectBtn2" style="width:100%;padding:9px;background:#e07820;color:#fff;font-weight:600;border:none;border-radius:5px;cursor:pointer;">🔍 Detectar i col·locar</button><div style="font-size:10px;color:#666;margin-top:8px;line-height:1.4;">Consell: posa\'t en vista de planta (PL) i acosta la càmera al sostre abans de detectar.</div>';
+      document.body.appendChild(panel);
+    }
+    // Cablejat (sempre, per si els elements han estat creats ara)
+    const b = document.getElementById('tbAI');
+    if (b && !b._wired) {
+      b._wired = true;
+      b.addEventListener('click', () => {
+        const p = document.getElementById('aiPanel');
+        if (p) p.style.display = (p.style.display === 'none' ? 'block' : 'none');
+      });
+    }
+    const c = document.getElementById('aiPanelClose');
+    if (c && !c._wired) {
+      c._wired = true;
+      c.addEventListener('click', () => {
+        const p = document.getElementById('aiPanel');
+        if (p) p.style.display = 'none';
+      });
+    }
+    const d = document.getElementById('aiDetectBtn2');
+    if (d && !d._wired) {
+      d._wired = true;
+      d.addEventListener('click', async () => {
+        const q = document.getElementById('aiDetectQuery2')?.value?.trim();
+        if (!q) { alert('Escriu què vols detectar.'); return; }
+        if (!localStorage.getItem('ai_api_key')) {
+          const k = prompt('Cal una clau API d\'Anthropic:');
+          if (!k) return;
+          localStorage.setItem('ai_api_key', k.trim());
+        }
+        const oldTxt = d.textContent; d.disabled = true; d.textContent = '⏳ Analitzant…';
+        try {
+          if (!_ed2d) { try { await activateEditor?.(); } catch(_) {} }
+          const res = await _semanticVisionEdit(q, 'marcar_cad', null);
+          const msg = (res || 'Fet.') + '\n\nVols veure la imatge enviada a la IA?';
+          if (confirm(msg) && window._lastVisionImage) {
+            const w = window.open('', '_blank');
+            if (w) w.document.write('<title>Imatge IA</title><body style="margin:0;background:#111"><img src="' + window._lastVisionImage + '" style="max-width:100%;display:block;margin:auto"><pre style="color:#ddd;font:12px monospace;white-space:pre-wrap;padding:12px">' + (window._lastVisionResponse || '').replace(/[<&]/g, c=>c==='<'?'&lt;':'&amp;') + '</pre></body>');
+          }
+        } catch (e) { alert('Error IA: ' + e.message); }
+        finally { d.disabled = false; d.textContent = oldTxt; }
+      });
+    }
+  };
+  ensureAI();
+  setTimeout(ensureAI, 1000);
+} catch (_) {}
 try { initGizmo(); } catch(e) { console.error('initGizmo() crashed:', e); }
 try { initActionLogger(); } catch(e) { console.error('initActionLogger() crashed:', e); }
 try { _translateUI(); } catch(e) { console.error('_translateUI() crashed:', e); }
