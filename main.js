@@ -7084,6 +7084,32 @@ function _getEditorViewPlane() {
 // BLOQUEIG ESTRICTE 2D: força la coordenada perpendicular al pla de vista a 0
 // (o al valor base actual gestionat per l'editor). Cap coordenada diagonal en
 // la 3a dimensió pot arribar mai a l'editor mentre estàs en una vista plana.
+// Retorna la posició 3D del punt del núvol més proper al cursor (en píxels)
+// si n'hi ha algun dins del radi maxPx. Utilitza intersectObjects amb Points
+// i threshold gran, i filtra el hit més proper en píxels a la pantalla.
+function _pickNearestCloudPoint(clientX, clientY, maxPx) {
+  if (!clouds || clouds.length === 0) return null;
+  const rect = renderer.domElement.getBoundingClientRect();
+  const nx = ((clientX - rect.left) / rect.width)  * 2 - 1;
+  const ny = -((clientY - rect.top)  / rect.height) * 2 + 1;
+  const rc = new THREE.Raycaster();
+  const cam = (useOrtho && orthoCamera) ? orthoCamera : camera;
+  // Threshold en unitats de món; l'escalem segons la mida del canvas i el zoom
+  // per aproximar el "radi maxPx en pantalla".
+  let worldThreshold;
+  if (cam.isOrthographicCamera) {
+    const viewH = (cam.top - cam.bottom) / (cam.zoom || 1);
+    worldThreshold = (viewH / rect.height) * (maxPx || 14);
+  } else {
+    worldThreshold = 0.15;   // fallback perspectiva
+  }
+  rc.params.Points = { threshold: worldThreshold };
+  rc.setFromCamera(new THREE.Vector2(nx, ny), cam);
+  const hits = rc.intersectObjects(clouds, false);
+  if (!hits.length) return null;
+  return hits[0].point.clone();
+}
+
 function _traceRaycast(clientX, clientY) {
   const rect = renderer.domElement.getBoundingClientRect();
   const nx = ((clientX - rect.left) / rect.width)  * 2 - 1;
@@ -7145,6 +7171,9 @@ async function _ensureEditor2D() {
   _ed2d = mod.createEditor2D({
     THREE, scene, renderer,
     screenToWorld:      (x, y) => _traceRaycast(x, y),
+    // Snap al núvol de punts: retorna la posició d'un punt del núvol si n'hi ha
+    // un prou a prop en píxels. maxPx = radi de captura sobre la pantalla.
+    pickCloudPoint:     (x, y, maxPx) => _pickNearestCloudPoint(x, y, maxPx || 14),
     getActiveCamera:    () => (useOrtho && orthoCamera) ? orthoCamera : camera,
     // Retorna 'top' | 'front' | 'side' | 'auto' — perquè l'editor sàpiga quin eix es bloqueja
     getViewPlane:       () => _getEditorViewPlane(),

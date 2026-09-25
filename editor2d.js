@@ -608,6 +608,66 @@ export function createEditor2D(ctx) {
     emitSel(); rebuild();
   }
 
+  // ── Snap helpers ──────────────────────────────────────────────────────────
+  // Ortho snap (tecla Shift): constreny el segon punt a angles de 0/45/90°
+  // respecte de l'ancoratge.
+  function _applyOrthoSnap(anchor, p, shift) {
+    if (!shift || !anchor) return p;
+    const pa = _planeAxes();
+    const du = p[pa.u] - anchor[pa.u];
+    const dv = p[pa.v] - anchor[pa.v];
+    const dist = Math.hypot(du, dv);
+    if (dist < 1e-6) return p;
+    const ang = Math.atan2(dv, du);
+    const step = Math.PI / 4;   // 45°
+    const snap = Math.round(ang / step) * step;
+    const out = { x: p.x, y: p.y, z: p.z };
+    out[pa.u] = anchor[pa.u] + Math.cos(snap) * dist;
+    out[pa.v] = anchor[pa.v] + Math.sin(snap) * dist;
+    return out;
+  }
+  // Snap al núvol de punts: si hi ha un punt del núvol prou a prop en píxels
+  // el fem servir com a posició (projectat al pla actiu).
+  function _snapToCloud(cx, cy) {
+    if (!ctx.pickCloudPoint) return null;
+    const cp = ctx.pickCloudPoint(cx, cy, 14);
+    if (!cp) return null;
+    const pa = _planeAxes();
+    const out = { x: cp.x, y: cp.y, z: cp.z };
+    if (pa.w === 'y' && planeY != null) out.y = planeY;
+    else out[pa.w] = 0;
+    return out;
+  }
+  // Punt del món amb prioritat: núvol de punts → pla
+  function _pickWorldSnap(cx, cy, e) {
+    const cloudP = _snapToCloud(cx, cy);
+    if (cloudP) return { p: cloudP, source: 'cloud' };
+    const w = ctx.screenToWorld(cx, cy);
+    if (!w) return null;
+    return { p: { x: w.x, y: w.y, z: w.z }, source: 'plane' };
+  }
+  // Marcador visual de snap sobre el núvol (petit cercle groc)
+  let snapMarker = null;
+  function _showSnapMarker(p) {
+    if (!snapMarker) {
+      const geo = new THREE.CircleGeometry(1, 24);
+      const mat = new THREE.MeshBasicMaterial({ color: 0xffdd44, transparent: true, opacity: 0.85, depthTest: false, side: THREE.DoubleSide });
+      snapMarker = new THREE.Mesh(geo, mat);
+      snapMarker.renderOrder = 999;
+      ctx.scene.add(snapMarker);
+    }
+    snapMarker.position.set(p.x, p.y, p.z);
+    // mida en píxels aprox
+    const cam = ctx.getActiveCamera();
+    let s = 0.05;
+    if (cam?.isOrthographicCamera) {
+      s = (cam.top - cam.bottom) / (cam.zoom || 1) * 0.008;
+    }
+    snapMarker.scale.setScalar(s);
+    snapMarker.visible = true;
+  }
+  function _hideSnapMarker() { if (snapMarker) snapMarker.visible = false; }
+
   // ── Pointer handlers ──────────────────────────────────────────────────────
   function onDown(e) {
     if (!active) return;
@@ -635,12 +695,14 @@ export function createEditor2D(ctx) {
 
     // Eines clic-clic: línia / rectangle / cercle
     if (mode === 'line-click' || mode === 'rect' || mode === 'circle') {
-      const w = ctx.screenToWorld(cx, cy);
-      if (!w) return;
+      const snap = _pickWorldSnap(cx, cy, e);
+      if (!snap) return;
       const pa = _planeAxes();
-      const p = { x: w.x, y: w.y, z: w.z };
-      if (pa.w === 'y') { if (planeY == null) planeY = w.y; p.y = planeY; }
+      let p = { x: snap.p.x, y: snap.p.y, z: snap.p.z };
+      if (pa.w === 'y') { if (planeY == null) planeY = p.y; p.y = planeY; }
       else { p[pa.w] = 0; }
+      // Ortho snap (Shift) sobre el segon punt
+      if (shapeAnchor && mode === 'line-click' && e.shiftKey) p = _applyOrthoSnap(shapeAnchor, p, true);
       if (!shapeAnchor) {
         shapeAnchor = p;
         removePreview();
@@ -653,6 +715,7 @@ export function createEditor2D(ctx) {
         removePreview();
         rebuild(); changed();
       }
+      _hideSnapMarker();
       return;
     }
 
@@ -850,13 +913,21 @@ export function createEditor2D(ctx) {
 
     // Preview per a les eines de clic-clic
     if ((mode === 'line-click' || mode === 'rect' || mode === 'circle') && shapeAnchor) {
-      const w = ctx.screenToWorld(cx, cy);
-      if (!w) return;
+      const snap = _pickWorldSnap(cx, cy, e);
+      if (!snap) return;
       const pa = _planeAxes();
-      const p = { x: w.x, y: w.y, z: w.z };
+      let p = { x: snap.p.x, y: snap.p.y, z: snap.p.z };
       if (pa.w === 'y' && planeY != null) p.y = planeY; else p[pa.w] = 0;
+      if (mode === 'line-click' && e.shiftKey) p = _applyOrthoSnap(shapeAnchor, p, true);
+      if (snap.source === 'cloud') _showSnapMarker(p); else _hideSnapMarker();
       updateShapePreview(mode === 'line-click' ? 'line' : mode, shapeAnchor, p);
       return;
+    }
+    // Sense ancoratge, encara marquem visualment el snap al núvol perquè es
+    // vegi on caurà el primer clic.
+    if ((mode === 'line-click' || mode === 'rect' || mode === 'circle') && !shapeAnchor) {
+      const cloudP = _snapToCloud(cx, cy);
+      if (cloudP) _showSnapMarker(cloudP); else _hideSnapMarker();
     }
 
     // Preview per a l'eina de copiar: mostra la forma font translada al cursor
@@ -1035,16 +1106,22 @@ export function createEditor2D(ctx) {
     const R = '\r\n';
     let dxf = '';
     dxf += '0'+R+'SECTION'+R+'2'+R+'HEADER'+R+'9'+R+'$ACADVER'+R+'1'+R+'AC1009'+R+'0'+R+'ENDSEC'+R;
-    dxf += '0'+R+'SECTION'+R+'2'+R+'TABLES'+R+'0'+R+'TABLE'+R+'2'+R+'LAYER'+R+'70'+R+'3'+R;
+    dxf += '0'+R+'SECTION'+R+'2'+R+'TABLES'+R+'0'+R+'TABLE'+R+'2'+R+'LAYER'+R+'70'+R+'4'+R;
     dxf += '0'+R+'LAYER'+R+'2'+R+'PARETS'+R+'70'+R+'0'+R+'62'+R+'1'+R+'6'+R+'CONTINUOUS'+R;
     dxf += '0'+R+'LAYER'+R+'2'+R+'PERIMETRE'+R+'70'+R+'0'+R+'62'+R+'4'+R+'6'+R+'CONTINUOUS'+R;
     dxf += '0'+R+'LAYER'+R+'2'+R+'OBERTURES'+R+'70'+R+'0'+R+'62'+R+'5'+R+'6'+R+'CONTINUOUS'+R;
+    dxf += '0'+R+'LAYER'+R+'2'+R+'DIBUIX'+R+'70'+R+'0'+R+'62'+R+'3'+R+'6'+R+'CONTINUOUS'+R;
     dxf += '0'+R+'ENDTAB'+R+'0'+R+'ENDSEC'+R;
     dxf += '0'+R+'SECTION'+R+'2'+R+'ENTITIES'+R;
     const lineDXF = (layer, x1, z1, x2, z2) => {
       dxf += '0'+R+'LINE'+R+'8'+R+layer+R;
       dxf += '10'+R+x1.toFixed(4)+R+'20'+R+z1.toFixed(4)+R+'30'+R+'0.0'+R;
       dxf += '11'+R+x2.toFixed(4)+R+'21'+R+z2.toFixed(4)+R+'31'+R+'0.0'+R;
+    };
+    const circleDXF = (layer, cx, cz, r) => {
+      dxf += '0'+R+'CIRCLE'+R+'8'+R+layer+R;
+      dxf += '10'+R+cx.toFixed(4)+R+'20'+R+cz.toFixed(4)+R+'30'+R+'0.0'+R;
+      dxf += '40'+R+r.toFixed(4)+R;
     };
     for (const w of walls) {
       const a = findNode(w.a), b = findNode(w.b);
@@ -1073,11 +1150,30 @@ export function createEditor2D(ctx) {
         lineDXF('OBERTURES', e1.x + n.x*mid, e1.z + n.z*mid, e2.x + n.x*mid, e2.z + n.z*mid);   // vidre
       }
     }
+    // Formes lliures (línies / rectangles / cercles) → capa DIBUIX
+    for (const sh of shapes) {
+      if (sh.type === 'line') {
+        lineDXF('DIBUIX', sh.a.x, sh.a.z, sh.b.x, sh.b.z);
+      } else if (sh.type === 'rect') {
+        const x1 = sh.a.x, z1 = sh.a.z, x2 = sh.b.x, z2 = sh.b.z;
+        lineDXF('DIBUIX', x1, z1, x2, z1);
+        lineDXF('DIBUIX', x2, z1, x2, z2);
+        lineDXF('DIBUIX', x2, z2, x1, z2);
+        lineDXF('DIBUIX', x1, z2, x1, z1);
+      } else if (sh.type === 'circle') {
+        const cx = sh.a.x, cz = sh.a.z;
+        const r = Math.hypot(sh.b.x - cx, sh.b.z - cz);
+        if (r > 1e-6) circleDXF('DIBUIX', cx, cz, r);
+      }
+    }
     dxf += '0'+R+'ENDSEC'+R+'0'+R+'EOF'+R;
     return dxf;
   }
   function exportDXF() {
-    if (walls.length === 0) { alert('No hi ha res per exportar. Dibuixa alguna paret o perímetre primer.'); return; }
+    if (walls.length === 0 && shapes.length === 0 && openings.length === 0) {
+      alert('No hi ha res per exportar. Dibuixa alguna paret, línia o forma primer.');
+      return;
+    }
     const dxf = buildDXF();
     const blob = new Blob([dxf], { type: 'application/dxf' });
     const url  = URL.createObjectURL(blob);
