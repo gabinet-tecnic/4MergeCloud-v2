@@ -7529,6 +7529,66 @@ function _wireEditorButtons(ed) {
   document.getElementById('edUndo').onclick   = () => { ed.undo(); upd(); };
   document.getElementById('edClear').onclick  = () => { if (confirm('Esborrar tota la planta?')) { ed.clear(); upd(); } };
   document.getElementById('edExport').onclick = () => ed.exportDXF();
+
+  // Import DXF a l'editor com a línies editables
+  document.getElementById('edImportDXF').addEventListener('change', (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const n = _importDXFToEditor(ev.target.result, ed);
+        alert(n === 0
+          ? 'No s\'han trobat entitats DXF importables (LINE/POLYLINE/CIRCLE).'
+          : n + ' línies importades. Ara les pots editar (moure, esborrar, afegir-ne) i tornar-les a exportar.');
+        upd();
+      } catch (err) {
+        console.error('DXF import:', err);
+        alert('Error important el DXF: ' + err.message);
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';   // permet reimportar el mateix fitxer
+  });
+}
+
+// Converteix entitats DXF a línies del `shapes` de l'editor. Les coordenades
+// DXF (x, y) es col·loquen al pla del top-view: three.js (x, planeY, -y).
+function _importDXFToEditor(text, ed) {
+  const entities = parseDXF(text);
+  if (!entities.length) return 0;
+  // Offset per centrar respecte al núvol de punts (com fa DXF Overlay)
+  let sx=0, sy=0, sz=0, np=0;
+  for (const en of entities) for (const p of en.pts) { sx+=p.x; sy+=p.y; sz+=p.z; np++; }
+  let ox=0, oy=0, oz=0;
+  if (np > 0) {
+    sx/=np; sy/=np; sz/=np;
+    if (clouds.length > 0) {
+      const c = new THREE.Box3().setFromObject(clouds[0]).getCenter(new THREE.Vector3());
+      ox = sx - c.x; oy = sy - c.y; oz = sz - c.z;
+    } else { ox = sx; oy = sy; oz = sz; }
+  }
+  // Alçada del pla d'edició — si no n'hi ha, el fixem a 0
+  const planeY = (ed._planeY != null) ? ed._planeY : 0;
+  const toXYZ = (p) => ({ x: p.x - ox, y: planeY, z: -(p.y - oy) });
+  let count = 0;
+  for (const en of entities) {
+    if (!en.pts || en.pts.length < 2) continue;
+    const m = en.pts.length;
+    for (let j = 0; j < m - 1; j++) {
+      const a = toXYZ(en.pts[j]);
+      const b = toXYZ(en.pts[j + 1]);
+      ed.addShape({ type: 'line', a, b });
+      count++;
+    }
+    if (en.closed && m > 2) {
+      const a = toXYZ(en.pts[m - 1]);
+      const b = toXYZ(en.pts[0]);
+      ed.addShape({ type: 'line', a, b });
+      count++;
+    }
+  }
+  return count;
 }
 
 async function toggleEditor2D() {
