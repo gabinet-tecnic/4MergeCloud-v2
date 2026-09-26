@@ -2351,30 +2351,8 @@ function parseDXF(text) {
   for (let i = 0; i + 1 < lines.length; i += 2)
     pairs.push([parseInt(lines[i].trim(), 10), lines[i + 1].trim()]);
 
-  const entities = [];
-  let inEntities = false;
-  let i = 0;
-
-  while (i < pairs.length) {
-    const [code, val] = pairs[i];
-    if (code === 0 && val === 'SECTION') {
-      inEntities = (pairs[i + 1]?.[1] === 'ENTITIES');
-      i += 2; continue;
-    }
-    if (code === 0 && val === 'ENDSEC') { inEntities = false; i++; continue; }
-    if (!inEntities || code !== 0 || val === 'EOF') { i++; continue; }
-
-    const type = val; i++;
-    const raw = {};
-    while (i < pairs.length && pairs[i][0] !== 0) {
-      const [c, v] = pairs[i];
-      if (!raw[c]) raw[c] = [];
-      raw[c].push(v);
-      i++;
-    }
-
+  function makeEntity(type, raw) {
     const ent = { type, layer: raw[8]?.[0] || '0', pts: [], closed: false };
-
     if (type === 'POINT') {
       ent.pts = [{ x: +raw[10]?.[0]||0, y: +raw[20]?.[0]||0, z: +raw[30]?.[0]||0 }];
     } else if (type === 'LINE') {
@@ -2404,27 +2382,139 @@ function parseDXF(text) {
       const N=Math.max(8,Math.round((a1-a0)/(Math.PI/24)));
       ent.pts = Array.from({length:N+1},(_,k)=>{
         const a=a0+(a1-a0)*k/N; return {x:cx+r*Math.cos(a),y:cy+r*Math.sin(a),z:cz};});
+    } else if (type === 'ELLIPSE') {
+      const cx=+raw[10]?.[0]||0, cy=+raw[20]?.[0]||0, cz=+raw[30]?.[0]||0;
+      const mx=+raw[11]?.[0]||0, my=+raw[21]?.[0]||0;
+      const ratio=+raw[40]?.[0]||1;
+      let t0=+raw[41]?.[0]||0, t1=+raw[42]?.[0]||(2*Math.PI);
+      const majLen=Math.hypot(mx,my); const ang=Math.atan2(my,mx);
+      if (t1<=t0) t1+=2*Math.PI;
+      const N=Math.max(24,Math.round((t1-t0)/(Math.PI/24)));
+      ent.pts=Array.from({length:N+1},(_,k)=>{
+        const t=t0+(t1-t0)*k/N;
+        const lx=majLen*Math.cos(t), ly=majLen*ratio*Math.sin(t);
+        return { x: cx+lx*Math.cos(ang)-ly*Math.sin(ang),
+                 y: cy+lx*Math.sin(ang)+ly*Math.cos(ang), z: cz };
+      });
+      ent.closed = Math.abs((t1-t0)-2*Math.PI) < 1e-3;
+    } else if (type === 'SPLINE') {
+      // Aproximació: fit points (11/21) si n'hi ha, sinó control points (10/20).
+      const fx=raw[11]||[], fy=raw[21]||[];
+      const cx=raw[10]||[], cy=raw[20]||[];
+      const xs = fx.length ? fx : cx, ys = fx.length ? fy : cy;
+      const zs = fx.length ? (raw[31]||[]) : (raw[30]||[]);
+      ent.pts = xs.map((x,k)=>({ x:+x, y:+ys[k]||0, z:+zs[k]||0 }));
+      ent.closed = (parseInt(raw[70]?.[0]||0) & 1) === 1;
+    } else if (type === 'INSERT') {
+      ent.blockName = raw[2]?.[0] || '';
+      ent.ix = +raw[10]?.[0]||0; ent.iy = +raw[20]?.[0]||0; ent.iz = +raw[30]?.[0]||0;
+      ent.sx = +raw[41]?.[0]||1; ent.sy = +raw[42]?.[0]||1; ent.sz = +raw[43]?.[0]||1;
+      ent.rot = (+raw[50]?.[0]||0) * Math.PI / 180;
     }
-    entities.push(ent);
+    return ent;
   }
 
-  // Uneix VERTEX amb el POLYLINE pare
-  const merged = [];
-  for (let k = 0; k < entities.length; k++) {
-    if (entities[k]._poly) {
-      const poly = {...entities[k], pts:[]};
-      k++;
-      while (k<entities.length && (entities[k].type==='VERTEX'||entities[k].type==='SEQEND')) {
-        if (entities[k].type==='VERTEX') poly.pts.push(entities[k].pts[0]);
+  function mergePolylines(list) {
+    const out = [];
+    for (let k = 0; k < list.length; k++) {
+      if (list[k]._poly) {
+        const poly = {...list[k], pts:[]};
         k++;
+        while (k<list.length && (list[k].type==='VERTEX'||list[k].type==='SEQEND')) {
+          if (list[k].type==='VERTEX') poly.pts.push(list[k].pts[0]);
+          k++;
+        }
+        k--;
+        out.push(poly);
+      } else if (list[k].type!=='VERTEX' && list[k].type!=='SEQEND') {
+        out.push(list[k]);
       }
-      k--;
-      merged.push(poly);
-    } else if (entities[k].type!=='VERTEX' && entities[k].type!=='SEQEND') {
-      merged.push(entities[k]);
+    }
+    return out;
+  }
+
+  // Recorre TOT el fitxer i separa les seccions ENTITIES i BLOCKS.
+  const entities = [];
+  const blocks   = new Map();       // name → { entities, bx, by, bz }
+  let section = null;               // 'ENTITIES' | 'BLOCKS' | null
+  let curBlockList = null;
+  let i = 0;
+
+  while (i < pairs.length) {
+    const [code, val] = pairs[i];
+    if (code === 0 && val === 'SECTION') {
+      section = pairs[i + 1]?.[1] || null;
+      if (section !== 'ENTITIES' && section !== 'BLOCKS') section = null;
+      i += 2; continue;
+    }
+    if (code === 0 && val === 'ENDSEC') { section = null; curBlockList = null; i++; continue; }
+    if (!section || code !== 0 || val === 'EOF') { i++; continue; }
+
+    const type = val; i++;
+    const raw = {};
+    while (i < pairs.length && pairs[i][0] !== 0) {
+      const [c, v] = pairs[i];
+      if (!raw[c]) raw[c] = [];
+      raw[c].push(v);
+      i++;
+    }
+
+    if (section === 'BLOCKS') {
+      if (type === 'BLOCK') {
+        const name = raw[2]?.[0] || raw[3]?.[0] || ('_' + blocks.size);
+        curBlockList = [];
+        blocks.set(name, { entities: curBlockList,
+          bx: +raw[10]?.[0]||0, by: +raw[20]?.[0]||0, bz: +raw[30]?.[0]||0 });
+        continue;
+      }
+      if (type === 'ENDBLK') { curBlockList = null; continue; }
+      if (curBlockList) curBlockList.push(makeEntity(type, raw));
+    } else if (section === 'ENTITIES') {
+      entities.push(makeEntity(type, raw));
     }
   }
-  return merged;
+
+  for (const b of blocks.values()) b.entities = mergePolylines(b.entities);
+  const rootEnts = mergePolylines(entities);
+
+  // Expandeix INSERTs aplicant transformació de cada bloc.
+  const expanded = [];
+  function transformPoint(p, ins, base) {
+    const lx = (p.x - base.bx) * ins.sx;
+    const ly = (p.y - base.by) * ins.sy;
+    const lz = (p.z - base.bz) * ins.sz;
+    const c = Math.cos(ins.rot), s = Math.sin(ins.rot);
+    return { x: ins.ix + lx*c - ly*s,
+             y: ins.iy + lx*s + ly*c,
+             z: ins.iz + lz };
+  }
+  function expand(list, depth) {
+    if (depth > 32) return;   // defensiu
+    for (const e of list) {
+      if (e.type === 'INSERT') {
+        const blk = blocks.get(e.blockName);
+        if (!blk) continue;
+        for (const be of blk.entities) {
+          if (be.type === 'INSERT') {
+            const p = transformPoint({x: be.ix, y: be.iy, z: be.iz}, e, blk);
+            const child = { ...be,
+              ix: p.x, iy: p.y, iz: p.z,
+              sx: be.sx * e.sx, sy: be.sy * e.sy, sz: be.sz * e.sz,
+              rot: be.rot + e.rot };
+            expand([child], depth + 1);
+          } else {
+            const clone = { type: be.type, layer: be.layer || e.layer, closed: be.closed, pts: [] };
+            for (const p of be.pts) clone.pts.push(transformPoint(p, e, blk));
+            expanded.push(clone);
+          }
+        }
+      } else {
+        expanded.push(e);
+      }
+    }
+  }
+  expand(rootEnts, 0);
+  return expanded;
 }
 
 function loadDXFFile(text, filename) {
