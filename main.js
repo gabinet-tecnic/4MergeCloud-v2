@@ -7642,8 +7642,11 @@ function _wireEditorButtons(ed) {
   });
 }
 
-// Converteix entitats DXF a línies del `shapes` de l'editor. Les coordenades
-// DXF (x, y) es col·loquen al pla del top-view: three.js (x, planeY, -y).
+// Converteix entitats DXF a formes editables del `shapes` de l'editor.
+// - LINE, LWPOLYLINE, POLYLINE, SPLINE, ARC, ELLIPSE → segments de línia.
+// - CIRCLE → forma 'circle' nativa (dos punts: centre + punt a la circumferència).
+// - Rectangles LWPOLYLINE de 4 vèrtexs alineats als eixos → forma 'rect' nativa.
+// Coordenades DXF (x, y) → three.js (x, planeY, -y).
 function _importDXFToEditor(text, ed) {
   const entities = parseDXF(text);
   if (!entities.length) return 0;
@@ -7658,11 +7661,58 @@ function _importDXFToEditor(text, ed) {
       ox = sx - c.x; oy = sy - c.y; oz = sz - c.z;
     } else { ox = sx; oy = sy; oz = sz; }
   }
-  // Alçada del pla d'edició — si no n'hi ha, el fixem a 0
   const planeY = (ed._planeY != null) ? ed._planeY : 0;
   const toXYZ = (p) => ({ x: p.x - ox, y: planeY, z: -(p.y - oy) });
+
+  // Detecta si una polilínia de 4 vèrtexs (o 5 tancats) descriu un rectangle
+  // amb costats alineats als eixos DXF x/y.
+  function tryRect(pts, closed) {
+    let cn = pts;
+    if (closed && pts.length >= 5) cn = pts.slice(0, 4);
+    if (cn.length !== 4) return null;
+    // Els costats han de ser alternament horitzontals i verticals
+    const eps = 1e-4;
+    const dx0 = Math.abs(cn[1].x - cn[0].x), dy0 = Math.abs(cn[1].y - cn[0].y);
+    const dx1 = Math.abs(cn[2].x - cn[1].x), dy1 = Math.abs(cn[2].y - cn[1].y);
+    const dx2 = Math.abs(cn[3].x - cn[2].x), dy2 = Math.abs(cn[3].y - cn[2].y);
+    const dx3 = Math.abs(cn[0].x - cn[3].x), dy3 = Math.abs(cn[0].y - cn[3].y);
+    const horiz = (dx, dy) => dy < eps && dx > eps;
+    const verti = (dx, dy) => dx < eps && dy > eps;
+    const okA = horiz(dx0,dy0) && verti(dx1,dy1) && horiz(dx2,dy2) && verti(dx3,dy3);
+    const okB = verti(dx0,dy0) && horiz(dx1,dy1) && verti(dx2,dy2) && horiz(dx3,dy3);
+    if (!okA && !okB) return null;
+    const xs = cn.map(p => p.x), ys = cn.map(p => p.y);
+    return { minX: Math.min(...xs), maxX: Math.max(...xs),
+             minY: Math.min(...ys), maxY: Math.max(...ys), z: cn[0].z || 0 };
+  }
+
   let count = 0;
   for (const en of entities) {
+    // CIRCLE original (venia densificat a 48 punts; el reconstruïm per centre+radi
+    // agafant els extrems x/y de la polilínia)
+    if (en.type === 'CIRCLE' && en.pts && en.pts.length >= 3) {
+      const xs = en.pts.map(p=>p.x), ys = en.pts.map(p=>p.y);
+      const cx = (Math.min(...xs)+Math.max(...xs))/2;
+      const cy = (Math.min(...ys)+Math.max(...ys))/2;
+      const r  = (Math.max(...xs)-Math.min(...xs))/2;
+      const a = toXYZ({x:cx, y:cy, z:en.pts[0].z});
+      const b = toXYZ({x:cx+r, y:cy, z:en.pts[0].z});
+      ed.addShape({ type: 'circle', a, b });
+      count++;
+      continue;
+    }
+    // LWPOLYLINE/POLYLINE tancada de 4 costats alineats → rectangle
+    if ((en.type === 'LWPOLYLINE' || en.type === 'POLYLINE') && en.pts && en.pts.length >= 4) {
+      const rect = tryRect(en.pts, en.closed);
+      if (rect) {
+        const a = toXYZ({x:rect.minX, y:rect.minY, z:rect.z});
+        const b = toXYZ({x:rect.maxX, y:rect.maxY, z:rect.z});
+        ed.addShape({ type: 'rect', a, b });
+        count++;
+        continue;
+      }
+    }
+    // Cas general: qualsevol entitat amb ≥2 punts es converteix en segments
     if (!en.pts || en.pts.length < 2) continue;
     const m = en.pts.length;
     for (let j = 0; j < m - 1; j++) {
