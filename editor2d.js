@@ -1214,8 +1214,22 @@ export function createEditor2D(ctx) {
     // Afegeix una forma programàticament (per exemple, des de la detecció d'objectes IA).
     addShape(sh) {
       if (!sh || !sh.type || !sh.a || !sh.b) return;
-      shapes.push({ id: sid++, type: sh.type, a: { ...sh.a }, b: { ...sh.b }, label: sh.label || null });
+      shapes.push({ id: sid++, type: sh.type, a: { ...sh.a }, b: { ...sh.b },
+                    label: sh.label || null, tag: sh.tag || null });
       rebuild(); changed();
+    },
+    // Esborra totes les formes amb un tag concret (p.ex. 'dxf' per treure un
+    // DXF importat sense tocar la resta del dibuix de l'usuari).
+    removeShapesByTag(tag) {
+      if (!tag) return 0;
+      const before = shapes.length;
+      shapes = shapes.filter(s => s.tag !== tag);
+      const removed = before - shapes.length;
+      if (removed > 0) { rebuild(); changed(); }
+      return removed;
+    },
+    hasShapesWithTag(tag) {
+      return shapes.some(s => s.tag === tag);
     },
     setMode(m) {
       mode = m; drawing = false; freePts = []; hoverId = null;

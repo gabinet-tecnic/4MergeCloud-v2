@@ -316,6 +316,7 @@ async function attachMeshFromFbx(cloud) {
       // Per FBX, per defecte mostrem la malla i amaguem el núvol
       mv.visible = true;
       cloud.material.visible = false;
+      _reapplyStoredClips(cloud);
       updateClipPlanes?.();
       updateCloudList?.();
     }
@@ -829,6 +830,7 @@ async function attachMergedMeshFromGlbs(cloud) {
   if (meshGroup.children.length > 0) {
     cloud.add(meshGroup);
     cloud.userData.meshView = meshGroup;
+    _reapplyStoredClips(cloud);
     updateClipPlanes();
     updateCloudList();
   }
@@ -847,12 +849,32 @@ async function attachMeshFromGlb(cloud) {
     if (mv) {
       cloud.add(mv);
       cloud.userData.meshView = mv;
+      _reapplyStoredClips(cloud);
       updateClipPlanes();
       updateCloudList();
     }
     rebuilt.geometry?.dispose?.();
     rebuilt.material?.dispose?.();
   } catch (e) { diag('⚠ malla no reconstruïda: ' + e.message); }
+}
+
+// Si el núvol porta plans de tall persistents (de talls aplicats abans de desar
+// el .4mc), els torna a retallar sobre la malla que acabem de reconstruir dels
+// bytes originals. Sense això, al reobrir la malla sortiria sencera, sense talls.
+function _reapplyStoredClips(cloud) {
+  const list = cloud.userData?.appliedClips;
+  if (!list || !list.length || !cloud.userData.meshView) return;
+  const planes = list.map(p => new THREE.Plane(new THREE.Vector3(p.nx, p.ny, p.nz), p.c));
+  const toRemove = [];
+  cloud.userData.meshView.traverse(o => {
+    if (o.isMesh && o.geometry) {
+      _cropMeshWithPlanes(o, planes);
+      const posA = o.geometry.getAttribute('position');
+      if (!posA || posA.count === 0) toRemove.push(o);
+      if (o.material) { o.material.clippingPlanes = []; o.material.needsUpdate = true; }
+    }
+  });
+  for (const o of toRemove) { o.parent?.remove(o); o.geometry?.dispose?.(); }
 }
 
 // ── Textos UI (CA / EN) ──────────────────────────────────────────────────────
@@ -4481,6 +4503,13 @@ function applyAndKeepClip() {
   box.updateMatrixWorld(true);
   const planes = LOCAL_CLIP_PLANES.map(p => p.clone().applyMatrix4(box.matrixWorld));
 
+  // Guardem els plans d'aquest tall al núvol perquè, si al reobrir el .4mc la
+  // malla es reconstrueix dels bytes originals, puguem tornar a retallar-la.
+  if (!cloud.userData.appliedClips) cloud.userData.appliedClips = [];
+  for (const p of planes) {
+    cloud.userData.appliedClips.push({ nx:p.normal.x, ny:p.normal.y, nz:p.normal.z, c:p.constant });
+  }
+
   cloud.updateMatrixWorld(true);
   const mw   = cloud.matrixWorld;
   const pos  = cloud.geometry.getAttribute('position');
@@ -6089,6 +6118,7 @@ function _serializeCloud(cloud, includeBigBytes) {
     glbList: includeList
       ? glbList.map(e => ({ bytes: e.bytes, matrix: Array.from(e.matrix.elements) }))
       : null,
+    appliedClips: cloud.userData?.appliedClips || null,
   };
 }
 function _deserializeCloud(d) {
@@ -6118,6 +6148,9 @@ function _deserializeCloud(d) {
       if (Array.isArray(e.matrix) && e.matrix.length === 16) mat.fromArray(e.matrix);
       return { bytes, matrix: mat };
     });
+  }
+  if (d.appliedClips && Array.isArray(d.appliedClips) && d.appliedClips.length) {
+    cloud.userData.appliedClips = d.appliedClips.map(p => ({ nx:+p.nx, ny:+p.ny, nz:+p.nz, c:+p.c }));
   }
   return cloud;
 }
@@ -6420,6 +6453,7 @@ function _buildProjectData() {
       glb: c.glb ? _u8ToB64(c.glb) : null,
       fbx: c.fbx ? _u8ToB64(c.fbx) : null,
       glbList: c.glbList ? c.glbList.map(e => ({ bytes: _u8ToB64(e.bytes), matrix: e.matrix })) : null,
+      appliedClips: c.appliedClips || null,
     })),
     drawing: s.drawing,
   };
@@ -6504,6 +6538,7 @@ async function loadProject(file) {
       glb: cd.glb ? _b64ToU8(cd.glb) : null,
       fbx: cd.fbx ? _b64ToU8(cd.fbx) : null,
       glbList: cd.glbList ? cd.glbList.map(e => ({ bytes: _b64ToU8(e.bytes), matrix: e.matrix })) : null,
+      appliedClips: cd.appliedClips || null,
     });
     scene.add(cloud); clouds.push(cloud); selectableObjects.push(cloud);
     if (cloud.userData?.glbBytesList) attachMergedMeshFromGlbs(cloud);
@@ -7640,6 +7675,18 @@ function _wireEditorButtons(ed) {
     reader.readAsText(file);
     e.target.value = '';   // permet reimportar el mateix fitxer
   });
+
+  // Treure només les formes importades del DXF (sense tocar la resta del dibuix)
+  document.getElementById('edRemoveDXF')?.addEventListener('click', () => {
+    if (!ed.hasShapesWithTag || !ed.hasShapesWithTag('dxf')) {
+      alert('No hi ha cap DXF importat al dibuix.');
+      return;
+    }
+    if (!confirm('Treure del dibuix totes les formes importades del DXF?\n\nLes formes dibuixades manualment es mantindran.')) return;
+    const n = ed.removeShapesByTag('dxf');
+    upd();
+    alert(n + ' formes del DXF eliminades.');
+  });
 }
 
 // Converteix entitats DXF a formes editables del `shapes` de l'editor.
@@ -7697,7 +7744,7 @@ function _importDXFToEditor(text, ed) {
       const r  = (Math.max(...xs)-Math.min(...xs))/2;
       const a = toXYZ({x:cx, y:cy, z:en.pts[0].z});
       const b = toXYZ({x:cx+r, y:cy, z:en.pts[0].z});
-      ed.addShape({ type: 'circle', a, b });
+      ed.addShape({ type: 'circle', a, b, tag: 'dxf' });
       count++;
       continue;
     }
@@ -7707,7 +7754,7 @@ function _importDXFToEditor(text, ed) {
       if (rect) {
         const a = toXYZ({x:rect.minX, y:rect.minY, z:rect.z});
         const b = toXYZ({x:rect.maxX, y:rect.maxY, z:rect.z});
-        ed.addShape({ type: 'rect', a, b });
+        ed.addShape({ type: 'rect', a, b, tag: 'dxf' });
         count++;
         continue;
       }
@@ -7718,13 +7765,13 @@ function _importDXFToEditor(text, ed) {
     for (let j = 0; j < m - 1; j++) {
       const a = toXYZ(en.pts[j]);
       const b = toXYZ(en.pts[j + 1]);
-      ed.addShape({ type: 'line', a, b });
+      ed.addShape({ type: 'line', a, b, tag: 'dxf' });
       count++;
     }
     if (en.closed && m > 2) {
       const a = toXYZ(en.pts[m - 1]);
       const b = toXYZ(en.pts[0]);
-      ed.addShape({ type: 'line', a, b });
+      ed.addShape({ type: 'line', a, b, tag: 'dxf' });
       count++;
     }
   }
