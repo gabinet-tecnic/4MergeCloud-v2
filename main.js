@@ -7692,6 +7692,17 @@ function _wireEditorButtons(ed) {
   document.getElementById('edRemoveDXF')?.addEventListener('click', () => {
     const hasShapes  = ed.hasShapesWithTag && ed.hasShapesWithTag('dxf');
     const hasOverlay = dxfOverlays.length > 0;
+    const totalShapes = ed.shapeCount ? ed.shapeCount() : 0;
+    // Fallback: en sessions antigues les formes importades no portaven el camp
+    // tag — si no en trobem cap d'etiquetada però SÍ que hi ha formes al
+    // dibuix, oferim esborrar-les totes (sense tocar parets/nodes/obertures).
+    if (!hasShapes && !hasOverlay && totalShapes > 0) {
+      if (!confirm('No hi ha formes etiquetades com a DXF (potser venien d\'una sessió anterior).\n\nVols esborrar TOTES les ' + totalShapes + ' formes (línies/rectangles/cercles) del dibuix?\n\nLes parets, nodes i obertures es mantindran.')) return;
+      const n = ed.clearAllShapes();
+      upd();
+      alert(n + ' formes eliminades.');
+      return;
+    }
     if (!hasShapes && !hasOverlay) {
       alert('No hi ha cap DXF carregat ni importat.');
       return;

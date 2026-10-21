@@ -1231,6 +1231,16 @@ export function createEditor2D(ctx) {
     hasShapesWithTag(tag) {
       return shapes.some(s => s.tag === tag);
     },
+    shapeCount() { return shapes.length; },
+    // Esborra totes les formes (línies/rectangles/cercles) sense tocar les
+    // parets/nodes/obertures. Útil per treure DXFs importats en sessions
+    // antigues on les formes no portaven encara el camp tag.
+    clearAllShapes() {
+      const n = shapes.length;
+      shapes = [];
+      if (n > 0) { rebuild(); changed(); }
+      return n;
+    },
     setMode(m) {
       mode = m; drawing = false; freePts = []; hoverId = null;
       shapeAnchor = null;
@@ -1331,7 +1341,7 @@ export function createEditor2D(ctx) {
         nodes: nodes.map(n => ({ id: n.id, x: n.x, y: n.y, z: n.z })),
         walls: walls.map(w => ({ a: w.a, b: w.b, thickness: w.thickness || 0, side: w.side || 0, type: w.type || 'wall' })),
         openings: openings.map(o => ({ wi: walls.indexOf(o.wall), t: o.t, width: o.width, type: o.type, rot: o.rot || 0 })).filter(o => o.wi >= 0),
-        shapes: shapes.map(sh => ({ id: sh.id, type: sh.type, a: { ...sh.a }, b: { ...sh.b } })),
+        shapes: shapes.map(sh => ({ id: sh.id, type: sh.type, a: { ...sh.a }, b: { ...sh.b }, label: sh.label || null, tag: sh.tag || null })),
         planeY, nid, sid,
       };
     },
@@ -1341,7 +1351,7 @@ export function createEditor2D(ctx) {
       walls = (s.walls || []).map(w => ({ ...w }));
       openings = (s.openings || []).filter(o => o.wi >= 0 && o.wi < walls.length)
         .map(o => ({ id: oid++, wall: walls[o.wi], t: o.t, width: o.width, type: o.type, rot: o.rot || 0 }));
-      shapes = (s.shapes || []).map(sh => ({ id: sh.id || sid++, type: sh.type, a: { ...sh.a }, b: { ...sh.b } }));
+      shapes = (s.shapes || []).map(sh => ({ id: sh.id || sid++, type: sh.type, a: { ...sh.a }, b: { ...sh.b }, label: sh.label || null, tag: sh.tag || null }));
       if (s.planeY != null) planeY = s.planeY;
       nid = Math.max(nid, s.nid || 1);
       sid = Math.max(sid, s.sid || 1);
