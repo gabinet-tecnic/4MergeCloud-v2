@@ -4959,6 +4959,18 @@ function setupUI() {
     e.target.value = '';
   };
 
+  // Treure tots els DXF Overlay carregats (sense tocar el núvol ni el dibuix)
+  document.getElementById('dxfRemoveAll')?.addEventListener('click', () => {
+    if (!dxfOverlays.length) { alert('No hi ha cap DXF carregat.'); return; }
+    if (!confirm('Treure els ' + dxfOverlays.length + ' DXF carregats de la vista?')) return;
+    for (const ov of dxfOverlays) {
+      scene.remove(ov.group);
+      ov.group.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
+    }
+    dxfOverlays.length = 0;
+    updateDXFList();
+  });
+
   // ── Noise filter ──
   const sigmaNoise = document.getElementById('noiseSigma');
   const sigmaVal   = document.getElementById('noiseSigmaVal');
@@ -7676,16 +7688,34 @@ function _wireEditorButtons(ed) {
     e.target.value = '';   // permet reimportar el mateix fitxer
   });
 
-  // Treure només les formes importades del DXF (sense tocar la resta del dibuix)
+  // Treure formes DXF importades al dibuix i també l'Overlay DXF si en queda.
   document.getElementById('edRemoveDXF')?.addEventListener('click', () => {
-    if (!ed.hasShapesWithTag || !ed.hasShapesWithTag('dxf')) {
-      alert('No hi ha cap DXF importat al dibuix.');
+    const hasShapes  = ed.hasShapesWithTag && ed.hasShapesWithTag('dxf');
+    const hasOverlay = dxfOverlays.length > 0;
+    if (!hasShapes && !hasOverlay) {
+      alert('No hi ha cap DXF carregat ni importat.');
       return;
     }
-    if (!confirm('Treure del dibuix totes les formes importades del DXF?\n\nLes formes dibuixades manualment es mantindran.')) return;
-    const n = ed.removeShapesByTag('dxf');
-    upd();
-    alert(n + ' formes del DXF eliminades.');
+    const parts = [];
+    if (hasShapes)  parts.push('formes DXF del dibuix');
+    if (hasOverlay) parts.push(dxfOverlays.length + ' DXF Overlay');
+    if (!confirm('Treure ' + parts.join(' + ') + '?\n\nLes formes dibuixades manualment es mantindran.')) return;
+    let msg = '';
+    if (hasShapes) {
+      const n = ed.removeShapesByTag('dxf');
+      upd();
+      msg += n + ' formes del DXF eliminades.';
+    }
+    if (hasOverlay) {
+      for (const ov of dxfOverlays) {
+        scene.remove(ov.group);
+        ov.group.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
+      }
+      dxfOverlays.length = 0;
+      updateDXFList();
+      msg += (msg ? '\n' : '') + 'DXF Overlay eliminat del visor.';
+    }
+    alert(msg);
   });
 }
 
